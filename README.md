@@ -11,4 +11,4 @@ Maintained by [Heretek Games](https://github.com/Heretek-Games/drop-federation).
 2. **Cross-Instance Social**: Send and accept friend requests across autonomous Drop instances without a centralized account directory.
 3. **Presence & Chat**: Real-time rich presence ("In Game", "Lobby Joinable") and secure peer-to-peer messaging.
 
-Built on the `@drop/plugin-sdk`.
+Built on the `@droposs/plugin-sdk`.
