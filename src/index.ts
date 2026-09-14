@@ -3,12 +3,28 @@ import { generateInstanceIdentity, type InstanceIdentity } from "./identity.js";
 
 export * from "./identity.js";
 
+async function getRequestBody<T = any>(event: any): Promise<T> {
+  if (event && event.body !== undefined) {
+    return event.body;
+  }
+  try {
+    // @ts-ignore
+    const h3 = await import("h3").catch(() => null);
+    if (h3?.readBody) {
+      return (await h3.readBody(event)) || ({} as T);
+    }
+    return (event?.body || {}) as T;
+  } catch {
+    return (event?.body || {}) as T;
+  }
+}
+
 export default class FederationPlugin implements ServerPlugin {
   metadata = {
     id: "drop-federation",
     name: "Friends Federation & Instance Peering",
     version: "0.1.0",
-    apiVersion: 1,
+    apiVersion: 2,
     capabilities: [
       "routes" as const,
       "storage" as const,
@@ -26,7 +42,9 @@ export default class FederationPlugin implements ServerPlugin {
     if (!identity) {
       identity = generateInstanceIdentity();
       await ctx.storage.set("instance_identity", identity);
-      ctx.logger.info(`Generated new instance identity: ${identity.instanceId}`);
+      ctx.logger.info(
+        `Generated new instance identity: ${identity.instanceId}`,
+      );
     }
 
     // REST: Instance descriptor
@@ -34,18 +52,23 @@ export default class FederationPlugin implements ServerPlugin {
       return {
         instanceId: identity?.instanceId,
         publicKey: identity?.publicKey,
-        apiVersion: 1,
+        apiVersion: 2,
         timestamp: Date.now(),
       };
     });
 
     // REST: Friend requests
     ctx.registerRoute("POST", "/friends/request", async (event) => {
-      const { remoteInstanceUrl, targetUser } = (event.body || {}) as any;
+      const body = await getRequestBody(event);
+      const { remoteInstanceUrl, targetUser } = (body || {}) as any;
       if (!remoteInstanceUrl) {
         return { error: "remoteInstanceUrl is required" };
       }
-      ctx.broadcast("federation:friends", { type: "request", remoteInstanceUrl, targetUser });
+      ctx.broadcast("federation:friends", {
+        type: "request",
+        remoteInstanceUrl,
+        targetUser,
+      });
       return { success: true };
     });
 

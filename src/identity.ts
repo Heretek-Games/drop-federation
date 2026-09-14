@@ -1,4 +1,4 @@
-import { generateKeyPairSync } from "node:crypto";
+import { createHash, generateKeyPairSync } from "node:crypto";
 
 export interface InstanceIdentity {
   instanceId: string;
@@ -13,7 +13,10 @@ export function generateInstanceIdentity(): InstanceIdentity {
   });
 
   return {
-    instanceId: Buffer.from(publicKey).toString("base64url").slice(0, 32),
+    instanceId: createHash("sha256")
+      .update(publicKey)
+      .digest("hex")
+      .slice(0, 32),
     publicKey,
     privateKey,
   };
