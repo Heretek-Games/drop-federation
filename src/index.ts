@@ -41,6 +41,13 @@ import {
   type SignedRotation,
 } from "./rotation.js";
 import {
+  DEFAULT_SHARING_SETTINGS,
+  SHARING_STORAGE_KEY,
+  normalizeSharingSettings,
+  visibleGames,
+  type SharingSettings,
+} from "./sharing.js";
+import {
   activePeers,
   applyPeerHeartbeat,
   applyPresenceUpdate,
@@ -59,6 +66,7 @@ export * from "./moderation.js";
 export * from "./odp.js";
 export * from "./presence.js";
 export * from "./rotation.js";
+export * from "./sharing.js";
 export * from "./transport.js";
 import {
   searchCatalog,
@@ -93,6 +101,15 @@ async function readAuthHeader(event: unknown): Promise<string | undefined> {
     // Ignore: treated as unauthenticated.
   }
   return undefined;
+}
+
+/** Whether the request carries the configured operator (admin) token. */
+async function authorizedOperator(event: unknown): Promise<boolean> {
+  const expected = process.env[ADMIN_TOKEN_ENV]?.trim();
+  if (!expected) return false;
+  const header = await readAuthHeader(event);
+  const [scheme, token] = (header ?? "").split(" ");
+  return scheme === "Bearer" && token === expected;
 }
 
 /** Peer-transport addresses advertised in the descriptor. */
@@ -557,6 +574,45 @@ export default class FederationPlugin implements ServerPlugin {
         if (remote) catalogs.push(remote);
       }
       return { catalogs, count: catalogs.length };
+    });
+
+    // REST: opt-in library sharing settings (operator only)
+    ctx.registerRoute("GET", "/sharing", async (event) => {
+      if (!(await authorizedOperator(event))) {
+        return { error: "Unauthorized" };
+      }
+      const settings =
+        (await ctx.storage.get<SharingSettings>(SHARING_STORAGE_KEY)) ??
+        DEFAULT_SHARING_SETTINGS;
+      return { settings };
+    });
+
+    ctx.registerRoute("POST", "/sharing", async (event) => {
+      if (!(await authorizedOperator(event))) {
+        return { error: "Unauthorized" };
+      }
+      const body = (await getRequestBody(event)) || ({} as any);
+      const settings = normalizeSharingSettings(
+        (body as { settings?: unknown }).settings ?? body,
+      );
+      await ctx.storage.set(SHARING_STORAGE_KEY, settings);
+      return { success: true, settings };
+    });
+
+    // REST: the games this instance currently shares (public read; empty when off)
+    ctx.registerRoute("GET", "/shared/library", async () => {
+      const settings =
+        (await ctx.storage.get<SharingSettings>(SHARING_STORAGE_KEY)) ??
+        DEFAULT_SHARING_SETTINGS;
+      const catalog =
+        (await ctx.storage.get<ODPCatalog>("odp:catalog")) ?? emptyCatalog();
+      const games = visibleGames(catalog.games, settings);
+      return {
+        instanceId: identity.instanceId,
+        scope: settings.scope,
+        games,
+        count: games.length,
+      };
     });
 
     // WebSocket: cross-instance presence + peer heartbeats

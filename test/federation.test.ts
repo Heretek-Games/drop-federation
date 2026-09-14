@@ -381,3 +381,97 @@ test("identity rotation is operator-only and publishes a verifiable chain", asyn
     }
   }
 });
+
+test("opt-in sharing scopes gate the shared library and revoke immediately", async () => {
+  const plugin = new FederationPlugin();
+  const ctx = new MockPluginContext("drop-federation", [
+    "routes",
+    "storage",
+    "events",
+    "network",
+    "websocket",
+  ]);
+  await plugin.init(ctx);
+
+  await ctx.storage.set("odp:catalog", {
+    instanceId: "self",
+    generatedAt: 1,
+    games: [
+      { gameId: "g1", title: "One", version: "1.0.0", updatedAt: 1 },
+      { gameId: "g2", title: "Two", version: "1.0.0", updatedAt: 2 },
+    ],
+  });
+
+  const shared = ctx.routes.get("GET /shared/library");
+  const setSharing = ctx.routes.get("POST /sharing");
+  const getSharing = ctx.routes.get("GET /sharing");
+  assert.ok(shared && setSharing && getSharing);
+
+  const before = (await shared.handler({} as any, {
+    params: {},
+    query: {},
+  })) as any;
+  assert.equal(before.count, 0, "nothing is shared by default");
+
+  const previousToken = process.env.DROP_FEDERATION_ADMIN_TOKEN;
+  process.env.DROP_FEDERATION_ADMIN_TOKEN = "s3cret";
+  try {
+    const unauth = (await setSharing.handler(
+      { body: { scope: "library" }, headers: new Headers() } as any,
+      { params: {}, query: {} },
+    )) as any;
+    assert.equal(unauth.error, "Unauthorized");
+
+    const authHeaders = {
+      headers: new Headers({ authorization: "Bearer s3cret" }),
+    };
+
+    const set = (await setSharing.handler(
+      { ...authHeaders, body: { scope: "library" } } as any,
+      { params: {}, query: {} },
+    )) as any;
+    assert.equal(set.success, true);
+
+    const listed = (await shared.handler({} as any, {
+      params: {},
+      query: {},
+    })) as any;
+    assert.equal(listed.count, 2);
+
+    await setSharing.handler(
+      { ...authHeaders, body: { scope: "games", games: ["g2"] } } as any,
+      { params: {}, query: {} },
+    );
+    const onlyTwo = (await shared.handler({} as any, {
+      params: {},
+      query: {},
+    })) as any;
+    assert.deepEqual(
+      onlyTwo.games.map((game: { gameId: string }) => game.gameId),
+      ["g2"],
+    );
+
+    const revoked = (await setSharing.handler(
+      { ...authHeaders, body: { scope: "none" } } as any,
+      { params: {}, query: {} },
+    )) as any;
+    assert.equal(revoked.settings.scope, "none");
+    const afterRevoke = (await shared.handler({} as any, {
+      params: {},
+      query: {},
+    })) as any;
+    assert.equal(afterRevoke.count, 0);
+
+    const settings = (await getSharing.handler(authHeaders as any, {
+      params: {},
+      query: {},
+    })) as any;
+    assert.equal(settings.settings.scope, "none");
+  } finally {
+    if (previousToken === undefined) {
+      delete process.env.DROP_FEDERATION_ADMIN_TOKEN;
+    } else {
+      process.env.DROP_FEDERATION_ADMIN_TOKEN = previousToken;
+    }
+  }
+});
