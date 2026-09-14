@@ -1,4 +1,4 @@
-import { generateKeyPairSync, createSign, createVerify } from "node:crypto";
+import { generateKeyPairSync } from "node:crypto";
 
 export interface InstanceIdentity {
   instanceId: string;
