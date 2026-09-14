@@ -89,3 +89,37 @@ export function mergeCatalog(
   }
   return [...merged.values()].sort((a, b) => a.gameId.localeCompare(b.gameId));
 }
+
+export interface ODPGameSearchResult extends ODPGameEntry {
+  sourceInstanceId: string;
+}
+
+/**
+ * Cross-instance discovery search across the local and every subscribed remote
+ * catalog. Matches titles case-insensitively, keeps the newest entry per game
+ * id, and tags each result with the instance that supplied it. Results are
+ * ordered newest first and bounded by `limit`.
+ */
+export function searchCatalog(
+  catalogs: Array<{ instanceId: string; games: ODPGameEntry[] }>,
+  query: string,
+  limit = 25,
+): ODPGameSearchResult[] {
+  const needle = query.trim().toLowerCase();
+  if (needle.length === 0) {
+    return [];
+  }
+  const best = new Map<string, ODPGameSearchResult>();
+  for (const catalog of catalogs) {
+    for (const game of catalog.games) {
+      if (!game.title.toLowerCase().includes(needle)) continue;
+      const existing = best.get(game.gameId);
+      if (!existing || game.updatedAt > existing.updatedAt) {
+        best.set(game.gameId, { ...game, sourceInstanceId: catalog.instanceId });
+      }
+    }
+  }
+  return [...best.values()]
+    .sort((a, b) => b.updatedAt - a.updatedAt)
+    .slice(0, Math.max(0, limit));
+}

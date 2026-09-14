@@ -49,7 +49,7 @@ export * from "./moderation.js";
 export * from "./odp.js";
 export * from "./presence.js";
 import {
-  mergeCatalog,
+  searchCatalog,
   signCatalog,
   verifyCatalogSignature,
   type ODPCatalog,
@@ -413,15 +413,53 @@ export default class FederationPlugin implements ServerPlugin {
         return { accepted: false, error: "invalid catalog signature" };
       }
 
-      const existing =
+      // Our published catalog stays our own; the verified remote catalog is
+      // stored separately so discovery search can attribute each result.
+      await ctx.storage.set(`odp:remote:${catalog.instanceId}`, catalog);
+      return { accepted: true, games: catalog.games.length };
+    });
+
+    // REST: cross-instance discovery search across local + subscribed catalogs
+    ctx.registerRoute("GET", "/odp/search", async (_event, routeCtx) => {
+      const rawQuery = routeCtx?.query?.q;
+      const query = Array.isArray(rawQuery) ? rawQuery[0] : (rawQuery ?? "");
+      const rawLimit = routeCtx?.query?.limit;
+      const parsedLimit = Number(Array.isArray(rawLimit) ? rawLimit[0] : rawLimit);
+      const limit =
+        Number.isFinite(parsedLimit) && parsedLimit > 0
+          ? Math.min(Math.floor(parsedLimit), 100)
+          : 25;
+
+      const local =
         (await ctx.storage.get<ODPCatalog>("odp:catalog")) ?? emptyCatalog();
-      const merged: ODPCatalog = {
-        instanceId: existing.instanceId,
-        generatedAt: Date.now(),
-        games: mergeCatalog(existing.games, catalog.games),
-      };
-      await ctx.storage.set("odp:catalog", merged);
-      return { accepted: true, games: merged.games.length };
+      const catalogs = [
+        { instanceId: identity.instanceId, games: local.games },
+      ];
+      const keys = await ctx.storage.listKeys();
+      for (const key of keys.filter((candidate) =>
+        candidate.startsWith("odp:remote:"),
+      )) {
+        const remote = await ctx.storage.get<ODPCatalog>(key);
+        if (remote) {
+          catalogs.push({ instanceId: remote.instanceId, games: remote.games });
+        }
+      }
+
+      const results = searchCatalog(catalogs, query, limit);
+      return { query, results, count: results.length };
+    });
+
+    // REST: subscribed remote catalogs
+    ctx.registerRoute("GET", "/odp/discover", async () => {
+      const keys = await ctx.storage.listKeys();
+      const catalogs: ODPCatalog[] = [];
+      for (const key of keys.filter((candidate) =>
+        candidate.startsWith("odp:remote:"),
+      )) {
+        const remote = await ctx.storage.get<ODPCatalog>(key);
+        if (remote) catalogs.push(remote);
+      }
+      return { catalogs, count: catalogs.length };
     });
 
     // WebSocket: cross-instance presence + peer heartbeats

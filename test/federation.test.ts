@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { MockPluginContext } from "@droposs/plugin-sdk";
 import FederationPlugin, {
   generateInstanceIdentity,
+  signCatalog,
   verifyDescriptor,
 } from "../src/index.js";
 
@@ -225,4 +226,58 @@ test("friend requests are rate limited per remote instance", async () => {
     { params: {}, query: {} },
   )) as any;
   assert.equal(overflow.code, "rate_limited");
+});
+
+test("ODP search discovers subscribed remote catalogs", async () => {
+  const plugin = new FederationPlugin();
+  const ctx = new MockPluginContext("drop-federation", [
+    "routes",
+    "storage",
+    "events",
+    "network",
+    "websocket",
+  ]);
+  await plugin.init(ctx);
+
+  const remote = generateInstanceIdentity();
+  const catalog = {
+    instanceId: remote.instanceId,
+    generatedAt: 1,
+    games: [
+      {
+        gameId: "remote-game",
+        title: "Remote Game",
+        version: "1.0.0",
+        updatedAt: 10,
+      },
+    ],
+  };
+  const signature = signCatalog(catalog, remote.privateKey as string);
+
+  const subscribe = ctx.routes.get("POST /odp/subscribe");
+  assert.ok(subscribe);
+  const accepted = (await subscribe.handler(
+    {
+      body: { catalog, signature, publicKey: remote.publicKey },
+    } as any,
+    { params: {}, query: {} },
+  )) as any;
+  assert.equal(accepted.accepted, true);
+
+  const search = ctx.routes.get("GET /odp/search");
+  assert.ok(search);
+  const found = (await search.handler({} as any, {
+    params: {},
+    query: { q: "remote" },
+  })) as any;
+  assert.equal(found.count, 1);
+  assert.equal(found.results[0].sourceInstanceId, remote.instanceId);
+
+  const discover = ctx.routes.get("GET /odp/discover");
+  assert.ok(discover);
+  const catalogs = (await discover.handler({} as any, {
+    params: {},
+    query: {},
+  })) as any;
+  assert.equal(catalogs.count, 1);
 });

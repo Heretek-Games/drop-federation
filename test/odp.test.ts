@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   canonicalizeCatalog,
   mergeCatalog,
+  searchCatalog,
   signCatalog,
   verifyCatalogSignature,
   type ODPCatalog,
@@ -62,3 +63,34 @@ test("mergeCatalog keeps the newest entry per game", () => {
   );
   assert.equal(merged[0].title, "A new");
 });
+
+test("searchCatalog matches titles across catalogs and tags the source", () => {
+  const catalogs = [
+    {
+      instanceId: "local",
+      games: [
+        { gameId: "a", title: "Hollow Knight", version: "1.0", updatedAt: 1 },
+      ],
+    },
+    {
+      instanceId: "peer-1",
+      games: [
+        { gameId: "b", title: "Hollow Knight: Silksong", version: "0.5", updatedAt: 10 },
+        { gameId: "c", title: "Celeste", version: "1.0", updatedAt: 5 },
+      ],
+    },
+  ];
+
+  const results = searchCatalog(catalogs, "hollow");
+  assert.equal(results.length, 2);
+  assert.equal(results[0].gameId, "b");
+  assert.equal(results[0].sourceInstanceId, "peer-1");
+  assert.deepEqual(
+    results.map((entry) => entry.sourceInstanceId),
+    ["peer-1", "local"],
+  );
+
+  assert.deepEqual(searchCatalog(catalogs, "   "), []);
+  assert.equal(searchCatalog(catalogs, "celeste", 0).length, 0);
+});
+
