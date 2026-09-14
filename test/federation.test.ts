@@ -1,7 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { MockPluginContext } from "@droposs/plugin-sdk";
-import FederationPlugin, { generateInstanceIdentity } from "../src/index.js";
+import FederationPlugin, {
+  generateInstanceIdentity,
+  verifyDescriptor,
+} from "../src/index.js";
 
 test("generateInstanceIdentity produces distinct, unique instance IDs", () => {
   const id1 = generateInstanceIdentity();
@@ -51,6 +54,12 @@ test("FederationPlugin initializes identity and registers routes and webhooks", 
   })) as any;
   assert.equal(descriptor.instanceId, storedIdentity.instanceId);
   assert.equal(descriptor.apiVersion, 2);
+  assert.equal(descriptor.descriptorVersion, 1);
+  assert.equal(typeof descriptor.signature, "string");
+  assert.equal(verifyDescriptor(descriptor, descriptor.signature), true);
+
+  const tampered = { ...descriptor, instanceId: "0".repeat(32) };
+  assert.equal(verifyDescriptor(tampered, descriptor.signature), false);
 
   // POST /friends/request validation
   const friendRoute = ctx.routes.get("POST /friends/request");
@@ -83,11 +92,13 @@ test("FederationPlugin initializes identity and registers routes and webhooks", 
     { params: {}, query: {} },
   )) as any;
   assert.equal(successRes.success, true);
-  assert.deepEqual(broadcastedPayload, {
-    type: "request",
-    remoteInstanceUrl: "https://drop.example.com",
-    targetUser: "alice",
-  });
+  assert.equal(successRes.request.status, "pending");
+  assert.equal(successRes.request.signatureVerified, false);
+  assert.equal(broadcastedPayload.type, "request");
+  assert.equal(broadcastedPayload.remoteInstanceUrl, "https://drop.example.com");
+  assert.equal(broadcastedPayload.targetUser, "alice");
+  assert.equal(broadcastedPayload.requestId, successRes.request.id);
+  assert.equal(broadcastedPayload.status, "pending");
 
   // WebSocket presence check
   const wsHandler = ctx.wsHandlers.get("federation:presence");
