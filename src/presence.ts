@@ -56,3 +56,50 @@ export function activePresence(
       record.status !== "offline" && now - record.updatedAt <= staleAfterMs,
   );
 }
+
+/** Prefix under which remote peer heartbeats are persisted. */
+export const PEER_STORAGE_PREFIX = "presence:peer:";
+
+/** Peers are considered gone if not heard from within this window. */
+export const DEFAULT_PEER_STALE_AFTER_MS = 15 * 60 * 1000;
+
+/** Minimal persisted record of a remote instance we have seen presence from. */
+export interface PeerRecord {
+  instanceId: string;
+  instanceUrl?: string;
+  publicKey?: string;
+  lastSeenAt: number;
+}
+
+export interface PeerHeartbeat {
+  instanceId: string;
+  instanceUrl?: string;
+  publicKey?: string;
+  now: number;
+}
+
+export function peerStorageKey(instanceId: string): string {
+  return `${PEER_STORAGE_PREFIX}${instanceId}`;
+}
+
+/** Folds a heartbeat into the previous peer record, keeping known metadata. */
+export function applyPeerHeartbeat(
+  existing: PeerRecord | undefined,
+  update: PeerHeartbeat,
+): PeerRecord {
+  return {
+    instanceId: update.instanceId,
+    instanceUrl: update.instanceUrl ?? existing?.instanceUrl,
+    publicKey: update.publicKey ?? existing?.publicKey,
+    lastSeenAt: update.now,
+  };
+}
+
+/** Keeps only peers heard from within the freshness window. */
+export function activePeers(
+  peers: PeerRecord[],
+  now: number,
+  staleAfterMs: number = DEFAULT_PEER_STALE_AFTER_MS,
+): PeerRecord[] {
+  return peers.filter((peer) => now - peer.lastSeenAt <= staleAfterMs);
+}

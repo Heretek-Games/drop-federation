@@ -7,13 +7,14 @@
   "scripts": {
     "build": "rm -rf dist && tsc",
     "test": "node --test dist/test/*.js",
+    "typecheck": "tsc --noEmit",
     "sign": "drop-plugin sign ."
   },
   "dependencies": {
-    "@droposs/plugin-sdk": "^0.1.0"
+    "@droposs/plugin-sdk": "^0.4.0"
   },
   "devDependencies": {
-    "@droposs/plugin-cli": "^0.1.0",
+    "@droposs/plugin-cli": "^0.4.0",
     "typescript": "^5.7.0",
     "@types/node": "^22.0.0"
   },
