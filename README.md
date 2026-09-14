@@ -16,6 +16,7 @@ Maintained by [Heretek Games](https://github.com/Heretek-Games/drop-federation).
 6. **Peer transport (direct + relay)**: descriptors advertise `endpoints` (`DROP_FEDERATION_ENDPOINTS`); `POST /peers/dial` fetches and cryptographically verifies a peer's signed descriptor before recording it. When direct dialing fails and `DROP_FEDERATION_RELAY_URL` is set, a relay retransmits the descriptor (`GET <relay>/relay/descriptor?target=...`) — the relay can only censor, never forge, because the descriptor is verified end to end.
 7. **Key rotation**: `POST /identity/rotate` (operator-only via `DROP_FEDERATION_ADMIN_TOKEN`) mints a new keypair and publishes a signed rotation certificate; `GET /identity/rotations` exposes the verifiable old→new chain so pinned peers can follow the transition.
 8. **Opt-in library sharing**: `POST /sharing` (operator-only) sets a sharing scope (`none`/`library`/`games`); `GET /shared/library` returns the currently-shared games and is empty by default or immediately after revocation.
+9. **WebRTC signaling relay**: `POST/GET/DELETE /signaling/:instanceId` provide a bounded, per-target mailbox for SDP offers/answers and ICE candidates (the relay never inspects the payload; peers connect via their own WebRTC stack).
 
 ## Status
 

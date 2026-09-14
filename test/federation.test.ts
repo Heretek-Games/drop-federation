@@ -538,3 +538,70 @@ test("catalog subscriptions can be listed and revoked", async () => {
   })) as any;
   assert.equal(found.count, 0);
 });
+
+test("signaling mailbox delivers and drains per target", async () => {
+  const plugin = new FederationPlugin();
+  const ctx = new MockPluginContext("drop-federation", [
+    "routes",
+    "storage",
+    "events",
+    "network",
+    "websocket",
+  ]);
+  await plugin.init(ctx);
+
+  const post = ctx.routes.get("POST /signaling/:instanceId");
+  const get = ctx.routes.get("GET /signaling/:instanceId");
+  const del = ctx.routes.get("DELETE /signaling/:instanceId");
+  assert.ok(post && get && del);
+
+  const unauth = (await post.handler(
+    { body: { kind: "offer", payload: {} } } as any,
+    { params: { instanceId: "peer-1" }, query: {}, userId: undefined },
+  )) as any;
+  assert.equal(unauth.error, "Authentication required to signal");
+
+  const invalid = (await post.handler(
+    { body: { kind: "bogus", payload: {} } } as any,
+    { params: { instanceId: "peer-1" }, query: {}, userId: "u1" },
+  )) as any;
+  assert.equal(invalid.error, "invalid signaling message");
+
+  const posted = (await post.handler(
+    { body: { kind: "offer", payload: { sdp: "v=0" } } } as any,
+    { params: { instanceId: "peer-1" }, query: {}, userId: "u1" },
+  )) as any;
+  assert.equal(posted.success, true);
+
+  const drained = (await get.handler({} as any, {
+    params: { instanceId: "peer-1" },
+    query: {},
+    userId: "u1",
+  })) as any;
+  assert.equal(drained.count, 1);
+  assert.equal(drained.messages[0].kind, "offer");
+
+  // Draining consumes the mailbox.
+  const empty = (await get.handler({} as any, {
+    params: { instanceId: "peer-1" },
+    query: {},
+    userId: "u1",
+  })) as any;
+  assert.equal(empty.count, 0);
+
+  await post.handler(
+    { body: { kind: "bye", payload: {} } } as any,
+    { params: { instanceId: "peer-1" }, query: {}, userId: "u1" },
+  );
+  await del.handler({} as any, {
+    params: { instanceId: "peer-1" },
+    query: {},
+    userId: "u1",
+  });
+  const after = (await get.handler({} as any, {
+    params: { instanceId: "peer-1" },
+    query: {},
+    userId: "u1",
+  })) as any;
+  assert.equal(after.count, 0);
+});

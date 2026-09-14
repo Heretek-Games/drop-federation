@@ -48,6 +48,12 @@ import {
   type SharingSettings,
 } from "./sharing.js";
 import {
+  enqueueMessage,
+  parseSignalingMessage,
+  signalingKey,
+  type SignalingMessage,
+} from "./signaling.js";
+import {
   activePeers,
   applyPeerHeartbeat,
   applyPresenceUpdate,
@@ -67,6 +73,7 @@ export * from "./odp.js";
 export * from "./presence.js";
 export * from "./rotation.js";
 export * from "./sharing.js";
+export * from "./signaling.js";
 export * from "./transport.js";
 import {
   searchCatalog,
@@ -655,6 +662,62 @@ export default class FederationPlugin implements ServerPlugin {
         count: games.length,
       };
     });
+
+    // REST: WebRTC signaling mailbox, one queue per target instance
+    ctx.registerRoute(
+      "POST",
+      "/signaling/:instanceId",
+      async (event, routeCtx) => {
+        if (!routeCtx.userId) {
+          return { error: "Authentication required to signal" };
+        }
+        const target = routeCtx.params.instanceId;
+        if (!target) return { error: "instanceId is required" };
+        const message = parseSignalingMessage(
+          await getRequestBody(event),
+          identity.instanceId,
+        );
+        if (!message) return { error: "invalid signaling message" };
+
+        const key = signalingKey(target);
+        const queue =
+          (await ctx.storage.get<SignalingMessage[]>(key)) ?? [];
+        await ctx.storage.set(key, enqueueMessage(queue, message));
+        ctx.broadcast(`federation:signaling:${target}`, message);
+        return { success: true };
+      },
+    );
+
+    ctx.registerRoute(
+      "GET",
+      "/signaling/:instanceId",
+      async (_event, routeCtx) => {
+        if (!routeCtx.userId) {
+          return { error: "Authentication required to read signaling" };
+        }
+        const target = routeCtx.params.instanceId;
+        if (!target) return { error: "instanceId is required" };
+        const key = signalingKey(target);
+        const messages =
+          (await ctx.storage.get<SignalingMessage[]>(key)) ?? [];
+        await ctx.storage.set(key, []);
+        return { messages, count: messages.length };
+      },
+    );
+
+    ctx.registerRoute(
+      "DELETE",
+      "/signaling/:instanceId",
+      async (_event, routeCtx) => {
+        if (!routeCtx.userId) {
+          return { error: "Authentication required to clear signaling" };
+        }
+        const target = routeCtx.params.instanceId;
+        if (!target) return { error: "instanceId is required" };
+        await ctx.storage.set(signalingKey(target), []);
+        return { success: true };
+      },
+    );
 
     // WebSocket: cross-instance presence + peer heartbeats
     ctx.registerWebSocket("federation:presence", async (msg, wsCtx) => {
