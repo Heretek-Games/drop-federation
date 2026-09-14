@@ -1,7 +1,13 @@
 import type { PluginContext, ServerPlugin } from "@droposs/plugin-sdk";
 import { generateInstanceIdentity, type InstanceIdentity } from "./identity.js";
+import {
+  applyPresenceUpdate,
+  type PresenceRecord,
+  type PresenceStatus,
+} from "./presence.js";
 
 export * from "./identity.js";
+export * from "./presence.js";
 
 async function getRequestBody<T = any>(event: any): Promise<T> {
   if (event && event.body !== undefined) {
@@ -73,7 +79,25 @@ export default class FederationPlugin implements ServerPlugin {
     });
 
     // WebSocket: Cross-instance presence
-    ctx.registerWebSocket("federation:presence", (msg, wsCtx) => {
+    ctx.registerWebSocket("federation:presence", async (msg, wsCtx) => {
+      const update = (msg ?? {}) as {
+        userId?: string;
+        status?: PresenceStatus;
+        gameId?: string;
+      };
+      if (update.userId) {
+        const key = `presence:${update.userId}`;
+        const existing = await ctx.storage.get<PresenceRecord>(key);
+        const record = applyPresenceUpdate(existing ?? undefined, {
+          userId: update.userId,
+          status: update.status ?? "online",
+          gameId: update.gameId,
+          instanceId: identity?.instanceId,
+          now: Date.now(),
+        });
+        await ctx.storage.set(key, record);
+        ctx.broadcast("federation:presence:update", record);
+      }
       wsCtx.send({ event: "presence_ack", instanceId: identity?.instanceId });
     });
   }
