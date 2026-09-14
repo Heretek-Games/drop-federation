@@ -13,12 +13,13 @@ Maintained by [Heretek Games](https://github.com/Heretek-Games/drop-federation).
 3. **Presence**: presence records over the `federation:presence` WebSocket channel and persisted, freshness-filtered peer heartbeats (`GET /peers`).
 4. **Open Depot Protocol**: signed catalog syndication (`GET /odp/catalog`, `POST /odp/subscribe`) with signature verification, plus cross-instance discovery search (`GET /odp/search`, `GET /odp/discover`).
 5. **Moderation & abuse controls**: peer block list (`POST /friends/block`, `/unblock`, `GET /friends/blocked`), immediate revocation (`POST /friends/remove`), and per-instance friend-request rate limiting.
+6. **Peer transport (direct)**: descriptors advertise `endpoints` (`DROP_FEDERATION_ENDPOINTS`); `POST /peers/dial` fetches and cryptographically verifies a peer's signed descriptor before recording it.
 
 ## Status
 
-Implemented: the routes above, signed and tamper-checked descriptors, friend persistence, presence/peer tracking, optional encrypted-at-rest key storage, ODP catalog subscription + provenance-aware discovery search, and moderation/rate limiting. The threat model is documented in [docs/security.md](docs/security.md).
+Implemented: the routes above, signed and tamper-checked descriptors (v2, with advertised endpoints), friend persistence, presence/peer tracking, optional encrypted-at-rest key storage, ODP catalog subscription + provenance-aware discovery search, moderation/rate limiting, and direct peer dialing with descriptor verification. The threat model is documented in [docs/security.md](docs/security.md).
 
-Not implemented yet: peer transport / NAT traversal ([#4](https://github.com/Heretek-Games/drop-federation/issues/4)), direct or group messaging ([#5](https://github.com/Heretek-Games/drop-federation/issues/5)), opt-in library/save sharing ([#6](https://github.com/Heretek-Games/drop-federation/issues/6)), and key rotation. There is no peer-to-peer messaging today.
+Not implemented yet: relay fallback and NAT traversal ([#4](https://github.com/Heretek-Games/drop-federation/issues/4)), direct or group messaging ([#5](https://github.com/Heretek-Games/drop-federation/issues/5)), opt-in library/save sharing ([#6](https://github.com/Heretek-Games/drop-federation/issues/6)), and key rotation. There is no peer-to-peer messaging today.
 
 ## Security
 

@@ -31,6 +31,11 @@ import {
 } from "./moderation.js";
 import { KEY_PASSPHRASE_ENV, resolveKeyPassphrase } from "./keystore.js";
 import {
+  dialPeer,
+  normalizePeerUrl,
+  type FetchLike,
+} from "./transport.js";
+import {
   activePeers,
   applyPeerHeartbeat,
   applyPresenceUpdate,
@@ -48,6 +53,7 @@ export * from "./keystore.js";
 export * from "./moderation.js";
 export * from "./odp.js";
 export * from "./presence.js";
+export * from "./transport.js";
 import {
   searchCatalog,
   signCatalog,
@@ -57,6 +63,16 @@ import {
 
 const INSTANCE_IDENTITY_KEY = "instance_identity";
 const API_VERSION = 2;
+
+/** Peer-transport addresses advertised in the descriptor. */
+function advertisedEndpoints(): string[] {
+  const raw = process.env.DROP_FEDERATION_ENDPOINTS;
+  if (!raw) return [];
+  return raw
+    .split(/[,\s]+/)
+    .map((value) => normalizePeerUrl(value))
+    .filter((value): value is string => Boolean(value));
+}
 
 async function getRequestBody<T = any>(event: any): Promise<T> {
   if (event && event.body !== undefined) {
@@ -148,7 +164,11 @@ export default class FederationPlugin implements ServerPlugin {
 
     // REST: signed instance descriptor
     ctx.registerRoute("GET", "/descriptor", async () => {
-      const descriptor = buildDescriptor(identity, API_VERSION);
+      const descriptor = buildDescriptor(
+        identity,
+        API_VERSION,
+        advertisedEndpoints(),
+      );
       if (!identity.privateKey) {
         ctx.logger.warn(
           "Instance private key unavailable; serving unsigned descriptor",
@@ -518,6 +538,37 @@ export default class FederationPlugin implements ServerPlugin {
       }
       const active = activePeers(peers, Date.now());
       return { peers: active, count: active.length };
+    });
+
+    // REST: dial a peer directly, verifying its signed descriptor, and record it
+    ctx.registerRoute("POST", "/peers/dial", async (event) => {
+      const body = (await getRequestBody(event)) || ({} as any);
+      const url: unknown = body.url ?? body.endpoint;
+      if (typeof url !== "string" || !url) {
+        return { error: "url is required" };
+      }
+      try {
+        const { url: peerUrl, descriptor } = await dialPeer(
+          url,
+          ctx.fetch as unknown as FetchLike,
+        );
+        const key = peerStorageKey(descriptor.instanceId);
+        const existing = await ctx.storage.get<PeerRecord>(key);
+        const peer = applyPeerHeartbeat(existing ?? undefined, {
+          instanceId: descriptor.instanceId,
+          instanceUrl: peerUrl,
+          publicKey: descriptor.publicKey,
+          now: Date.now(),
+        });
+        await ctx.storage.set(key, peer);
+        ctx.broadcast("federation:peers:update", peer);
+        return { success: true, descriptor, peer };
+      } catch (error) {
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : "peer dial failed",
+        };
+      }
     });
   }
 

@@ -8,7 +8,8 @@
 
 - **`src/identity.ts`**: Ed25519 key generation and instance descriptor hashing.
 - **`src/moderation.ts`**: Peer block list (`BlockedPeer`) and a sliding-window rate limiter for abuse controls.
-- **`src/index.ts`**: Plugin entry point implementing `ServerPlugin` with `/descriptor`, `/friends/*` (request/accept/reject/remove/block/unblock/blocked), `/odp/*`, and `/peers` endpoints, and the `federation:presence` WebSocket channel.
+- **`src/transport.ts`**: Direct peer dialing — URL normalization, descriptor fetch, and signature/instance-id verification (`dialPeer`).
+- **`src/index.ts`**: Plugin entry point implementing `ServerPlugin` with `/descriptor`, `/friends/*` (request/accept/reject/remove/block/unblock/blocked), `/odp/*`, `/peers` and `/peers/dial` endpoints, and the `federation:presence` WebSocket channel.
 - **Capabilities**: `routes`, `storage`, `events`, `network`, `websocket`.
 
 ---

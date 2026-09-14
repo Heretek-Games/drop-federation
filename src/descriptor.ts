@@ -15,13 +15,15 @@
 import { createPublicKey, sign, verify } from "node:crypto";
 import { deriveInstanceId, type InstanceIdentity } from "./identity.js";
 
-export const DESCRIPTOR_FORMAT_VERSION = 1;
+export const DESCRIPTOR_FORMAT_VERSION = 2;
 
 export interface InstanceDescriptor {
   instanceId: string;
   publicKey: string;
   apiVersion: number;
   descriptorVersion: number;
+  /** Advertised peer-transport base URLs (direct dial candidates). */
+  endpoints: string[];
   timestamp: number;
 }
 
@@ -32,6 +34,7 @@ export interface SignedDescriptor extends InstanceDescriptor {
 export function buildDescriptor(
   identity: InstanceIdentity,
   apiVersion: number,
+  endpoints: string[] = [],
   timestamp: number = Date.now(),
 ): InstanceDescriptor {
   return {
@@ -39,15 +42,20 @@ export function buildDescriptor(
     publicKey: identity.publicKey,
     apiVersion,
     descriptorVersion: DESCRIPTOR_FORMAT_VERSION,
+    endpoints: [...endpoints],
     timestamp,
   };
 }
 
-/** Deterministic JSON so signer and verifier hash identical bytes. */
+/**
+ * Deterministic JSON so signer and verifier hash identical bytes. `endpoints`
+ * are sorted so peer address order never changes the signed payload.
+ */
 export function canonicalizeDescriptor(descriptor: InstanceDescriptor): string {
   return JSON.stringify({
     apiVersion: descriptor.apiVersion,
     descriptorVersion: descriptor.descriptorVersion,
+    endpoints: [...(descriptor.endpoints ?? [])].sort(),
     instanceId: descriptor.instanceId,
     publicKey: descriptor.publicKey,
     timestamp: descriptor.timestamp,

@@ -55,7 +55,7 @@ test("FederationPlugin initializes identity and registers routes and webhooks", 
   })) as any;
   assert.equal(descriptor.instanceId, storedIdentity.instanceId);
   assert.equal(descriptor.apiVersion, 2);
-  assert.equal(descriptor.descriptorVersion, 1);
+  assert.equal(descriptor.descriptorVersion, 2);
   assert.equal(typeof descriptor.signature, "string");
   assert.equal(verifyDescriptor(descriptor, descriptor.signature), true);
 
@@ -280,4 +280,32 @@ test("ODP search discovers subscribed remote catalogs", async () => {
     query: {},
   })) as any;
   assert.equal(catalogs.count, 1);
+});
+
+test("peers/dial validates input before dialing", async () => {
+  const plugin = new FederationPlugin();
+  const ctx = new MockPluginContext("drop-federation", [
+    "routes",
+    "storage",
+    "events",
+    "network",
+    "websocket",
+  ]);
+  await plugin.init(ctx);
+
+  const dial = ctx.routes.get("POST /peers/dial");
+  assert.ok(dial, "POST /peers/dial must be registered");
+
+  const missing = (await dial.handler({ body: {} } as any, {
+    params: {},
+    query: {},
+  })) as any;
+  assert.equal(missing.error, "url is required");
+
+  const invalid = (await dial.handler({ body: { url: "ftp://peer" } } as any, {
+    params: {},
+    query: {},
+  })) as any;
+  assert.equal(invalid.success, false);
+  assert.match(invalid.error, /valid http/);
 });
