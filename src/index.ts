@@ -8,6 +8,13 @@ import {
 
 export * from "./identity.js";
 export * from "./presence.js";
+export * from "./odp.js";
+import {
+  mergeCatalog,
+  signCatalog,
+  verifyCatalogSignature,
+  type ODPCatalog,
+} from "./odp.js";
 
 async function getRequestBody<T = any>(event: any): Promise<T> {
   if (event && event.body !== undefined) {
@@ -76,6 +83,47 @@ export default class FederationPlugin implements ServerPlugin {
         targetUser,
       });
       return { success: true };
+    });
+
+    // Open Depot Protocol: signed catalog syndication
+    const emptyCatalog = (): ODPCatalog => ({
+      instanceId: identity?.instanceId ?? "",
+      generatedAt: Date.now(),
+      games: [],
+    });
+
+    ctx.registerRoute("GET", "/odp/catalog", async () => {
+      const catalog =
+        (await ctx.storage.get<ODPCatalog>("odp:catalog")) ?? emptyCatalog();
+      const signature = identity?.privateKey
+        ? signCatalog(catalog, identity.privateKey)
+        : undefined;
+      return { catalog, signature };
+    });
+
+    ctx.registerRoute("POST", "/odp/subscribe", async (event) => {
+      const body = await getRequestBody(event);
+      const { catalog, signature, publicKey } = (body || {}) as {
+        catalog?: ODPCatalog;
+        signature?: string;
+        publicKey?: string;
+      };
+      if (!catalog || !signature || !publicKey) {
+        return { error: "catalog, signature and publicKey are required" };
+      }
+      if (!verifyCatalogSignature(catalog, signature, publicKey)) {
+        return { accepted: false, error: "invalid catalog signature" };
+      }
+
+      const existing =
+        (await ctx.storage.get<ODPCatalog>("odp:catalog")) ?? emptyCatalog();
+      const merged: ODPCatalog = {
+        instanceId: existing.instanceId,
+        generatedAt: Date.now(),
+        games: mergeCatalog(existing.games, catalog.games),
+      };
+      await ctx.storage.set("odp:catalog", merged);
+      return { accepted: true, games: merged.games.length };
     });
 
     // WebSocket: Cross-instance presence
