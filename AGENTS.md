@@ -7,7 +7,8 @@
 ## 1. Architecture
 
 - **`src/identity.ts`**: Ed25519 key generation and instance descriptor hashing.
-- **`src/index.ts`**: Plugin entry point implementing `ServerPlugin` with `/descriptor` and `/friends/request` endpoints, and `federation:presence` WebSocket channel.
+- **`src/moderation.ts`**: Peer block list (`BlockedPeer`) and a sliding-window rate limiter for abuse controls.
+- **`src/index.ts`**: Plugin entry point implementing `ServerPlugin` with `/descriptor`, `/friends/*` (request/accept/reject/remove/block/unblock/blocked), `/odp/*`, and `/peers` endpoints, and the `federation:presence` WebSocket channel.
 - **Capabilities**: `routes`, `storage`, `events`, `network`, `websocket`.
 
 ---

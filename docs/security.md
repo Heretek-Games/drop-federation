@@ -85,3 +85,29 @@ interface PluginSecretStore {
 
 Until that exists, the passphrase envelope above is the no-new-dependency
 mitigation and the plaintext fallback is loudly signposted rather than silent.
+
+## Threat model (federation is opt-in)
+
+Federation connects independent, mutually-untrusted instances. Every capability
+is explicit and can be revoked; nothing is shared until an operator accepts a
+peer.
+
+| Threat | Vector | Mitigation |
+| --- | --- | --- |
+| **Malicious peer** | A peer sends forged friend requests, catalogs, or presence. | Ed25519 signatures on descriptors, friend requests, and ODP catalogs (`verifyDescriptor`, `verifyFriendRequestSignature`, `verifyCatalogSignature`). Unsigned requests are accepted only with `signatureVerified: false` and a warning. |
+| **Descriptor spoofing** | Impersonating another instance. | Self-certifying instance id derived from the public key (`deriveInstanceId`); the descriptor signature is verified against the advertised key. Key pinning supported by `verifyDescriptor`. |
+| **Resource abuse / flooding** | Mass friend requests or subscriptions exhausting storage/CPU. | Sliding-window rate limiter per remote instance (`SlidingWindowRateLimiter`, 20 requests/minute by default) plus a block list. |
+| **Persistent abuse** | A blocked or revoked peer keeps reconnecting. | `POST /friends/block` persists a block (by instance id and URL) and drops cached peer state; blocked instances are rejected before persistence. |
+| **Revocation lag** | A removed friend retains access. | `POST /friends/remove` deletes the request/link and any cached peer record immediately; presence is informational and re-established only by a fresh, authenticated heartbeat. |
+| **Relay operators** | A relay observes peer IPs and instance ids. | Relays are opt-in and documented as learning both (issue #4); traffic stays end-to-end encrypted. Relay is a fallback, never required. |
+| **Metadata leakage** | Peers learn more than intended about users/games. | Only presence heartbeats and catalog entries are exchanged; library/save sharing is a separate explicit opt-in (#6). Peer-supplied keys are informational and never make trust decisions. |
+| **Key compromise** | A leaked private key allows impersonation. | Passphrase-sealed key at rest (AES-256-GCM + scrypt); rotation is tracked in #2. |
+
+### Consent and defaults
+
+- Federation routes are inert until an operator configures the instance and
+  accepts a peer; there is no implicit peering.
+- Blocks and revocations take effect immediately and survive restarts.
+- The rate limiter is in-process, matching the plugin runtime's single-process
+  state; a horizontally-scaled deployment should move it to shared storage
+  (tracked with the WebSocket-state prerequisite in #5).

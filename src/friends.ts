@@ -148,3 +148,16 @@ export function listFriendRequests(
     ? requests.filter((request) => request.status === status)
     : requests;
 }
+
+/** Remove every request matching a request id, instance id, or instance URL. */
+export function removeFriendRequest(
+  requests: FriendRequest[],
+  identifier: string,
+): FriendRequest[] {
+  return requests.filter(
+    (request) =>
+      request.id !== identifier &&
+      request.remoteInstanceId !== identifier &&
+      request.remoteInstanceUrl !== identifier,
+  );
+}

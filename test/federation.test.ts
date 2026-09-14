@@ -121,3 +121,108 @@ test("FederationPlugin initializes identity and registers routes and webhooks", 
     instanceId: storedIdentity.instanceId,
   });
 });
+
+test("federation moderation routes block, revoke and unblock peers", async () => {
+  const plugin = new FederationPlugin();
+  const ctx = new MockPluginContext("drop-federation", [
+    "routes",
+    "storage",
+    "events",
+    "network",
+    "websocket",
+  ]);
+  await plugin.init(ctx);
+
+  const request = ctx.routes.get("POST /friends/request");
+  assert.ok(request);
+  await request.handler(
+    {
+      body: {
+        remoteInstanceUrl: "https://peer.example",
+        targetUser: "bob",
+        remoteInstanceId: "peerid",
+      },
+    } as any,
+    { params: {}, query: {} },
+  );
+
+  const remove = ctx.routes.get("POST /friends/remove");
+  assert.ok(remove);
+  const removed = (await remove.handler({ body: { remoteInstanceId: "peerid" } } as any, {
+    params: {},
+    query: {},
+  })) as any;
+  assert.equal(removed.success, true);
+  assert.equal(removed.removed, true);
+
+  const block = ctx.routes.get("POST /friends/block");
+  assert.ok(block);
+  const blocked = (await block.handler(
+    {
+      body: {
+        remoteInstanceUrl: "https://peer.example",
+        remoteInstanceId: "peerid",
+        reason: "spam",
+      },
+    } as any,
+    { params: {}, query: {} },
+  )) as any;
+  assert.equal(blocked.success, true);
+  assert.equal(blocked.blocked.instanceId, "peerid");
+
+  const blockedList = ctx.routes.get("GET /friends/blocked");
+  assert.ok(blockedList);
+  const list = (await blockedList.handler({} as any, {
+    params: {},
+    query: {},
+  })) as any;
+  assert.equal(list.count, 1);
+
+  // Requests from a blocked instance are rejected before persistence.
+  const rejected = (await request.handler(
+    { body: { remoteInstanceUrl: "https://peer.example", targetUser: "bob" } } as any,
+    { params: {}, query: {} },
+  )) as any;
+  assert.equal(rejected.code, "blocked");
+
+  const unblock = ctx.routes.get("POST /friends/unblock");
+  assert.ok(unblock);
+  const unblocked = (await unblock.handler(
+    { body: { remoteInstanceUrl: "https://peer.example" } } as any,
+    { params: {}, query: {} },
+  )) as any;
+  assert.equal(unblocked.unblocked, 1);
+});
+
+test("friend requests are rate limited per remote instance", async () => {
+  const plugin = new FederationPlugin();
+  const ctx = new MockPluginContext("drop-federation", [
+    "routes",
+    "storage",
+    "events",
+    "network",
+    "websocket",
+  ]);
+  await plugin.init(ctx);
+
+  const request = ctx.routes.get("POST /friends/request");
+  assert.ok(request);
+  for (let i = 0; i < 20; i++) {
+    const res = (await request.handler(
+      {
+        body: {
+          remoteInstanceUrl: "https://flood.example",
+          targetUser: `user-${i}`,
+        },
+      } as any,
+      { params: {}, query: {} },
+    )) as any;
+    assert.equal(res.success, true, `request ${i} should succeed`);
+  }
+
+  const overflow = (await request.handler(
+    { body: { remoteInstanceUrl: "https://flood.example", targetUser: "x" } } as any,
+    { params: {}, query: {} },
+  )) as any;
+  assert.equal(overflow.code, "rate_limited");
+});

@@ -15,11 +15,20 @@ import {
   findFriendRequest,
   friendRequestId,
   listFriendRequests,
+  removeFriendRequest,
   upsertFriendRequest,
   verifyFriendRequestSignature,
   type FriendRequest,
   type FriendRequestStatus,
 } from "./friends.js";
+import {
+  BLOCKED_STORAGE_KEY,
+  SlidingWindowRateLimiter,
+  addBlocked,
+  isBlocked,
+  removeBlocked,
+  type BlockedPeer,
+} from "./moderation.js";
 import { KEY_PASSPHRASE_ENV, resolveKeyPassphrase } from "./keystore.js";
 import {
   activePeers,
@@ -36,6 +45,7 @@ export * from "./descriptor.js";
 export * from "./friends.js";
 export * from "./identity.js";
 export * from "./keystore.js";
+export * from "./moderation.js";
 export * from "./odp.js";
 export * from "./presence.js";
 import {
@@ -156,6 +166,16 @@ export default class FederationPlugin implements ServerPlugin {
     const persistFriends = async (friends: FriendRequest[]): Promise<void> => {
       await ctx.storage.set(FRIENDS_STORAGE_KEY, friends);
     };
+    const readBlocked = async (): Promise<BlockedPeer[]> =>
+      (await ctx.storage.get<BlockedPeer[]>(BLOCKED_STORAGE_KEY)) ?? [];
+    const requestLimiter = new SlidingWindowRateLimiter();
+
+    // Drop any cached presence/peer record for a revoked instance.
+    const forgetPeer = async (instanceId?: string): Promise<void> => {
+      if (instanceId) {
+        await ctx.storage.delete(peerStorageKey(instanceId));
+      }
+    };
 
     // REST: Friend requests (persisted; broadcast kept for live listeners)
     ctx.registerRoute("POST", "/friends/request", async (event) => {
@@ -177,6 +197,19 @@ export default class FederationPlugin implements ServerPlugin {
       };
       if (!remoteInstanceUrl) {
         return { error: "remoteInstanceUrl is required" };
+      }
+      if (!requestLimiter.allow(remoteInstanceUrl)) {
+        ctx.logger.warn(
+          `Friend request rate limit exceeded for ${remoteInstanceUrl}`,
+        );
+        return { error: "Rate limit exceeded", code: "rate_limited" };
+      }
+      const blocked = isBlocked(await readBlocked(), {
+        instanceId: remoteInstanceId,
+        instanceUrl: remoteInstanceUrl,
+      });
+      if (blocked) {
+        return { error: "Instance is blocked", code: "blocked" };
       }
 
       const timestamp =
@@ -280,6 +313,74 @@ export default class FederationPlugin implements ServerPlugin {
           : undefined;
       const friends = listFriendRequests(await readFriends(), status);
       return { friends, count: friends.length };
+    });
+
+    // REST: revoke an accepted friend or pending request immediately
+    ctx.registerRoute("POST", "/friends/remove", async (event) => {
+      const body = (await getRequestBody(event)) || ({} as any);
+      const identifier =
+        body.requestId ?? body.remoteInstanceId ?? body.remoteInstanceUrl;
+      if (!identifier) {
+        return {
+          error: "requestId, remoteInstanceId or remoteInstanceUrl is required",
+        };
+      }
+      const existing = findFriendRequest(await readFriends(), identifier);
+      await persistFriends(
+        removeFriendRequest(await readFriends(), identifier),
+      );
+      await forgetPeer(existing?.remoteInstanceId);
+      ctx.broadcast("federation:friends", {
+        type: "removed",
+        identifier,
+      });
+      return { success: true, removed: Boolean(existing) };
+    });
+
+    // REST: block an instance (drops any peer state and rejects future requests)
+    ctx.registerRoute("POST", "/friends/block", async (event) => {
+      const body = (await getRequestBody(event)) || ({} as any);
+      const instanceUrl: string | undefined =
+        body.remoteInstanceUrl ?? body.instanceUrl;
+      if (!instanceUrl) {
+        return { error: "remoteInstanceUrl is required" };
+      }
+      const existing = findFriendRequest(await readFriends(), instanceUrl);
+      const entry: BlockedPeer = {
+        instanceUrl,
+        instanceId: body.remoteInstanceId ?? existing?.remoteInstanceId,
+        reason: typeof body.reason === "string" ? body.reason : undefined,
+        timestamp: Date.now(),
+      };
+      await ctx.storage.set(
+        BLOCKED_STORAGE_KEY,
+        addBlocked(await readBlocked(), entry),
+      );
+      await persistFriends(removeFriendRequest(await readFriends(), instanceUrl));
+      await forgetPeer(entry.instanceId);
+      ctx.broadcast("federation:friends", { type: "blocked", entry });
+      return { success: true, blocked: entry };
+    });
+
+    // REST: lift a block
+    ctx.registerRoute("POST", "/friends/unblock", async (event) => {
+      const body = (await getRequestBody(event)) || ({} as any);
+      const instanceUrl: string | undefined =
+        body.remoteInstanceUrl ?? body.instanceUrl;
+      const instanceId: string | undefined = body.remoteInstanceId;
+      if (!instanceUrl && !instanceId) {
+        return { error: "remoteInstanceUrl or remoteInstanceId is required" };
+      }
+      const blocked = await readBlocked();
+      const next = removeBlocked(blocked, { instanceId, instanceUrl });
+      await ctx.storage.set(BLOCKED_STORAGE_KEY, next);
+      return { success: true, unblocked: blocked.length - next.length };
+    });
+
+    // REST: list blocked instances
+    ctx.registerRoute("GET", "/friends/blocked", async () => {
+      const blocked = await readBlocked();
+      return { blocked, count: blocked.length };
     });
 
     // Open Depot Protocol: signed catalog syndication
