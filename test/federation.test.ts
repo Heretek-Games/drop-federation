@@ -475,3 +475,66 @@ test("opt-in sharing scopes gate the shared library and revoke immediately", asy
     }
   }
 });
+
+test("catalog subscriptions can be listed and revoked", async () => {
+  const plugin = new FederationPlugin();
+  const ctx = new MockPluginContext("drop-federation", [
+    "routes",
+    "storage",
+    "events",
+    "network",
+    "websocket",
+  ]);
+  await plugin.init(ctx);
+
+  const remote = generateInstanceIdentity();
+  const catalog = {
+    instanceId: remote.instanceId,
+    generatedAt: 1,
+    games: [
+      { gameId: "sub-game", title: "Subscribed", version: "1.0.0", updatedAt: 1 },
+    ],
+  };
+  const signature = signCatalog(catalog, remote.privateKey as string);
+
+  const subscribe = ctx.routes.get("POST /odp/subscribe");
+  assert.ok(subscribe);
+  await subscribe.handler(
+    { body: { catalog, signature, publicKey: remote.publicKey } } as any,
+    { params: {}, query: {} },
+  );
+
+  const list = ctx.routes.get("GET /odp/subscriptions");
+  assert.ok(list);
+  const listed = (await list.handler({} as any, {
+    params: {},
+    query: {},
+  })) as any;
+  assert.equal(listed.count, 1);
+  assert.equal(listed.subscriptions[0].instanceId, remote.instanceId);
+  assert.equal(listed.subscriptions[0].games, 1);
+  assert.equal(typeof listed.subscriptions[0].subscribedAt, "number");
+
+  const remove = ctx.routes.get("DELETE /odp/subscriptions/:instanceId");
+  assert.ok(remove);
+  const removed = (await remove.handler({} as any, {
+    params: { instanceId: remote.instanceId },
+    query: {},
+  })) as any;
+  assert.equal(removed.removed, true);
+
+  const after = (await list.handler({} as any, {
+    params: {},
+    query: {},
+  })) as any;
+  assert.equal(after.count, 0);
+
+  // Revocation removes it from discovery search too.
+  const search = ctx.routes.get("GET /odp/search");
+  assert.ok(search);
+  const found = (await search.handler({} as any, {
+    params: {},
+    query: { q: "Subscribed" },
+  })) as any;
+  assert.equal(found.count, 0);
+});

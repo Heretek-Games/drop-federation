@@ -530,6 +530,10 @@ export default class FederationPlugin implements ServerPlugin {
       // Our published catalog stays our own; the verified remote catalog is
       // stored separately so discovery search can attribute each result.
       await ctx.storage.set(`odp:remote:${catalog.instanceId}`, catalog);
+      await ctx.storage.set(
+        `odp:subscribed:${catalog.instanceId}`,
+        Date.now(),
+      );
       return { accepted: true, games: catalog.games.length };
     });
 
@@ -575,6 +579,43 @@ export default class FederationPlugin implements ServerPlugin {
       }
       return { catalogs, count: catalogs.length };
     });
+
+    // REST: list catalog subscriptions (provenance + timestamps)
+    ctx.registerRoute("GET", "/odp/subscriptions", async () => {
+      const keys = await ctx.storage.listKeys();
+      const subscriptions = [];
+      for (const key of keys.filter((candidate) =>
+        candidate.startsWith("odp:remote:"),
+      )) {
+        const instanceId = key.slice("odp:remote:".length);
+        const catalog = await ctx.storage.get<ODPCatalog>(key);
+        if (!catalog) continue;
+        const subscribedAt = await ctx.storage.get<number>(
+          `odp:subscribed:${instanceId}`,
+        );
+        subscriptions.push({
+          instanceId: catalog.instanceId,
+          games: catalog.games.length,
+          subscribedAt: subscribedAt ?? null,
+        });
+      }
+      return { subscriptions, count: subscriptions.length };
+    });
+
+    // REST: revoke a catalog subscription
+    ctx.registerRoute(
+      "DELETE",
+      "/odp/subscriptions/:instanceId",
+      async (_event, routeCtx) => {
+        const instanceId = routeCtx.params.instanceId;
+        if (!instanceId) return { error: "instanceId is required" };
+        const catalogKey = `odp:remote:${instanceId}`;
+        const existing = await ctx.storage.get(catalogKey);
+        await ctx.storage.delete(catalogKey);
+        await ctx.storage.delete(`odp:subscribed:${instanceId}`);
+        return { success: true, removed: Boolean(existing) };
+      },
+    );
 
     // REST: opt-in library sharing settings (operator only)
     ctx.registerRoute("GET", "/sharing", async (event) => {
