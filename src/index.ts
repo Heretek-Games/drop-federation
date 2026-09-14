@@ -36,6 +36,11 @@ import {
   type FetchLike,
 } from "./transport.js";
 import {
+  buildRotation,
+  signRotation,
+  type SignedRotation,
+} from "./rotation.js";
+import {
   activePeers,
   applyPeerHeartbeat,
   applyPresenceUpdate,
@@ -53,6 +58,7 @@ export * from "./keystore.js";
 export * from "./moderation.js";
 export * from "./odp.js";
 export * from "./presence.js";
+export * from "./rotation.js";
 export * from "./transport.js";
 import {
   searchCatalog,
@@ -62,7 +68,32 @@ import {
 } from "./odp.js";
 
 const INSTANCE_IDENTITY_KEY = "instance_identity";
+const ROTATIONS_STORAGE_KEY = "instance_rotations";
+const ADMIN_TOKEN_ENV = "DROP_FEDERATION_ADMIN_TOKEN";
 const API_VERSION = 2;
+
+/** Read the `Authorization` header from a plugin route event. */
+async function readAuthHeader(event: unknown): Promise<string | undefined> {
+  const headers = (event as { headers?: unknown } | null)?.headers;
+  if (headers && typeof (headers as Headers).get === "function") {
+    return (headers as Headers).get("authorization") ?? undefined;
+  }
+  if (headers && typeof headers === "object") {
+    const record = headers as Record<string, unknown>;
+    const value = record["authorization"] ?? record["Authorization"];
+    if (typeof value === "string") return value;
+  }
+  try {
+    // @ts-ignore optional h3 host binding
+    const h3 = await import("h3").catch(() => null);
+    if (h3?.getHeader && event) {
+      return (h3.getHeader(event, "authorization") as string | undefined) ?? undefined;
+    }
+  } catch {
+    // Ignore: treated as unauthenticated.
+  }
+  return undefined;
+}
 
 /** Peer-transport addresses advertised in the descriptor. */
 function advertisedEndpoints(): string[] {
@@ -160,7 +191,7 @@ export default class FederationPlugin implements ServerPlugin {
     ctx.logger.info("Initializing Friends Federation plugin...");
 
     const passphrase = resolveKeyPassphrase();
-    const identity = await loadOrCreateIdentity(ctx, passphrase);
+    let identity = await loadOrCreateIdentity(ctx, passphrase);
 
     // REST: signed instance descriptor
     ctx.registerRoute("GET", "/descriptor", async () => {
@@ -178,6 +209,52 @@ export default class FederationPlugin implements ServerPlugin {
       return {
         ...descriptor,
         signature: signDescriptor(descriptor, identity.privateKey),
+      };
+    });
+
+    // REST: published key-rotation chain (peers verify it offline)
+    ctx.registerRoute("GET", "/identity/rotations", async () => {
+      const rotations =
+        (await ctx.storage.get<SignedRotation[]>(ROTATIONS_STORAGE_KEY)) ?? [];
+      return { rotations, count: rotations.length };
+    });
+
+    // REST: rotate the instance key (operator-only; disabled without a token)
+    ctx.registerRoute("POST", "/identity/rotate", async (event) => {
+      const expected = process.env[ADMIN_TOKEN_ENV]?.trim();
+      if (!expected) {
+        return {
+          error:
+            "Key rotation is disabled (DROP_FEDERATION_ADMIN_TOKEN is not set)",
+        };
+      }
+      const header = await readAuthHeader(event);
+      const [scheme, token] = (header ?? "").split(" ");
+      if (scheme !== "Bearer" || token !== expected) {
+        return { error: "Unauthorized" };
+      }
+      if (!identity.privateKey) {
+        return { error: "Instance private key is unavailable" };
+      }
+
+      const next = generateInstanceIdentity();
+      const certificate = buildRotation(identity, next);
+      const signature = signRotation(certificate, identity.privateKey);
+      const rotations =
+        (await ctx.storage.get<SignedRotation[]>(ROTATIONS_STORAGE_KEY)) ?? [];
+      rotations.push({ certificate, signature });
+      await ctx.storage.set(ROTATIONS_STORAGE_KEY, rotations);
+      await ctx.storage.set(
+        INSTANCE_IDENTITY_KEY,
+        toStoredIdentity(next, passphrase),
+      );
+      identity = next;
+      ctx.logger.info(`Rotated instance identity to ${next.instanceId}`);
+
+      return {
+        success: true,
+        instanceId: next.instanceId,
+        rotation: { certificate, signature },
       };
     });
 

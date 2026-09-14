@@ -63,7 +63,7 @@ the public key and a signature.
 | --- | --- | --- |
 | Storage backend read (backup, dump, host compromise) | Reduced | AES-256-GCM envelope; plaintext migration; warning when unset. |
 | Passphrase visible in process env (`/proc/<pid>/environ`) | Accepted | Same-host attacker with process access can already read plugin memory. Request an SDK credential/keyring capability (below). |
-| No key rotation / compromise recovery | Open | Tracked in #2/#7: add `POST /identity/rotate`, publish old+new descriptors during handover, rotate scoped peer tokens on rotation. |
+| No key rotation / compromise recovery | Implemented | `POST /identity/rotate` (operator-only via `DROP_FEDERATION_ADMIN_TOKEN`) mints a new keypair and publishes a signed old→new rotation certificate; `GET /identity/rotations` exposes the verifiable chain so pinned peers can follow it. Rotating does not retroactively protect data exposed before rotation. |
 | Backups predating encryption retain plaintext | Open (operational) | Rotate the identity after enabling encryption if old backups cannot be purged. |
 | Passphrase strength | Operational | Documented high-entropy requirement; consider rejecting passphrases < 16 chars in a follow-up. |
 | Malicious peer / descriptor spoofing | Reduced | Self-certifying instance ID + Ed25519 descriptor signature (`verifyDescriptor`), signature verification on ODP subscriptions and friend requests. |

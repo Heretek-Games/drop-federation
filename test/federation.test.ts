@@ -5,6 +5,7 @@ import FederationPlugin, {
   generateInstanceIdentity,
   signCatalog,
   verifyDescriptor,
+  verifyRotationChain,
 } from "../src/index.js";
 
 test("generateInstanceIdentity produces distinct, unique instance IDs", () => {
@@ -308,4 +309,75 @@ test("peers/dial validates input before dialing", async () => {
   })) as any;
   assert.equal(invalid.success, false);
   assert.match(invalid.error, /valid http/);
+});
+
+test("identity rotation is operator-only and publishes a verifiable chain", async () => {
+  const plugin = new FederationPlugin();
+  const ctx = new MockPluginContext("drop-federation", [
+    "routes",
+    "storage",
+    "events",
+    "network",
+    "websocket",
+  ]);
+  await plugin.init(ctx);
+
+  const descriptorRoute = ctx.routes.get("GET /descriptor");
+  assert.ok(descriptorRoute);
+  const before = (await descriptorRoute.handler({} as any, {
+    params: {},
+    query: {},
+  })) as any;
+
+  const rotate = ctx.routes.get("POST /identity/rotate");
+  assert.ok(rotate, "POST /identity/rotate must be registered");
+
+  // Disabled unless the operator configures an admin token.
+  const disabled = (await rotate.handler({} as any, {
+    params: {},
+    query: {},
+  })) as any;
+  assert.match(disabled.error, /disabled/);
+
+  const previousToken = process.env.DROP_FEDERATION_ADMIN_TOKEN;
+  process.env.DROP_FEDERATION_ADMIN_TOKEN = "s3cret";
+  try {
+    const unauth = (await rotate.handler({ headers: new Headers() } as any, {
+      params: {},
+      query: {},
+    })) as any;
+    assert.equal(unauth.error, "Unauthorized");
+
+    const rotated = (await rotate.handler(
+      { headers: new Headers({ authorization: "Bearer s3cret" }) } as any,
+      { params: {}, query: {} },
+    )) as any;
+    assert.equal(rotated.success, true);
+    assert.notEqual(rotated.instanceId, before.instanceId);
+
+    const after = (await descriptorRoute.handler({} as any, {
+      params: {},
+      query: {},
+    })) as any;
+    assert.equal(after.instanceId, rotated.instanceId);
+    assert.equal(verifyDescriptor(after, after.signature), true);
+
+    const chainRoute = ctx.routes.get("GET /identity/rotations");
+    assert.ok(chainRoute);
+    const chain = (await chainRoute.handler({} as any, {
+      params: {},
+      query: {},
+    })) as any;
+    assert.equal(chain.count, 1);
+    assert.equal(
+      verifyRotationChain(chain.rotations, before.instanceId),
+      true,
+    );
+  } finally {
+    if (previousToken === undefined) {
+      delete process.env.DROP_FEDERATION_ADMIN_TOKEN;
+    } else {
+      process.env.DROP_FEDERATION_ADMIN_TOKEN = previousToken;
+    }
+  }
 });
