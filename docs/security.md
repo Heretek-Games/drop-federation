@@ -94,7 +94,9 @@ peer.
 
 | Threat | Vector | Mitigation |
 | --- | --- | --- |
-| **Malicious peer** | A peer sends forged friend requests, catalogs, or presence. | Ed25519 signatures on descriptors, friend requests, and ODP catalogs (`verifyDescriptor`, `verifyFriendRequestSignature`, `verifyCatalogSignature`). Unsigned requests are accepted only with `signatureVerified: false` and a warning. |
+| **Malicious peer** | A peer sends forged friend requests, catalogs, or presence. | Ed25519 signatures on descriptors, friend requests, and ODP catalogs (`verifyDescriptor`, `verifyFriendRequestSignature`, `verifyCatalogSignature`). Unsigned friend requests are **rejected** unless the operator explicitly opts in with `DROP_FEDERATION_ALLOW_UNSIGNED_REQUESTS=true`. |
+| **Key substitution** | A peer heartbeats a different key after first contact. | `isHeartbeatKeyConsistent` rejects a heartbeat whose `publicKey` conflicts with the stored peer key (trust-on-first-use). |
+| **Cross-user mailbox access** | One authenticated user reads or drains another user's signaling queue. | Signaling mailboxes and broadcast channels are namespaced per authenticated `userId` (`signalingMailboxKey`, `signalingChannel`); the operator/bearer token comparison is constant-time (`matchesBearerToken`). |
 | **Descriptor spoofing** | Impersonating another instance. | Self-certifying instance id derived from the public key (`deriveInstanceId`); the descriptor signature is verified against the advertised key. Key pinning supported by `verifyDescriptor`. |
 | **Resource abuse / flooding** | Mass friend requests or subscriptions exhausting storage/CPU. | Sliding-window rate limiter per remote instance (`SlidingWindowRateLimiter`, 20 requests/minute by default) plus a block list. |
 | **Persistent abuse** | A blocked or revoked peer keeps reconnecting. | `POST /friends/block` persists a block (by instance id and URL) and drops cached peer state; blocked instances are rejected before persistence. |

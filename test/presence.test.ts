@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   activePresence,
   applyPresenceUpdate,
+  isHeartbeatKeyConsistent,
   type PresenceRecord,
 } from "../src/index.js";
 
@@ -44,4 +45,18 @@ test("activePresence drops offline and stale records", () => {
     active.map((r) => r.userId),
     ["fresh"],
   );
+});
+
+test("isHeartbeatKeyConsistent rejects key substitution after first contact", () => {
+  const peer = {
+    instanceId: "inst-a",
+    publicKey: "key-a",
+    lastSeenAt: 1000,
+  };
+  // First sighting or no key assertion is allowed.
+  assert.equal(isHeartbeatKeyConsistent(undefined, "key-a"), true);
+  assert.equal(isHeartbeatKeyConsistent(peer, undefined), true);
+  // Same key is allowed; a conflicting key is rejected.
+  assert.equal(isHeartbeatKeyConsistent(peer, "key-a"), true);
+  assert.equal(isHeartbeatKeyConsistent(peer, "key-b"), false);
 });

@@ -28,6 +28,23 @@ export function signalingKey(instanceId: string): string {
   return `signaling:${instanceId}`;
 }
 
+/**
+ * Storage key for a single user's mailbox with a target instance. Mailboxes are
+ * user-scoped so one authenticated user cannot read or clear another user's
+ * queued signaling messages.
+ */
+export function signalingMailboxKey(
+  userId: string,
+  instanceId: string,
+): string {
+  return `signaling:user:${userId}:${instanceId}`;
+}
+
+/** Broadcast channel for a single user's signaling messages with a target. */
+export function signalingChannel(userId: string, instanceId: string): string {
+  return `federation:signaling:${userId}:${instanceId}`;
+}
+
 function isKind(value: unknown): value is SignalingKind {
   return (
     typeof value === "string" &&

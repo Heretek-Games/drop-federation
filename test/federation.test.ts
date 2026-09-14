@@ -8,6 +8,10 @@ import FederationPlugin, {
   verifyRotationChain,
 } from "../src/index.js";
 
+// Legacy tests exercise unsigned requests; the strict default is covered by a
+// dedicated test that removes this opt-out.
+process.env.DROP_FEDERATION_ALLOW_UNSIGNED_REQUESTS = "true";
+
 test("generateInstanceIdentity produces distinct, unique instance IDs", () => {
   const id1 = generateInstanceIdentity();
   const id2 = generateInstanceIdentity();
@@ -604,4 +608,68 @@ test("signaling mailbox delivers and drains per target", async () => {
     userId: "u1",
   })) as any;
   assert.equal(after.count, 0);
+});
+
+test("signaling mailboxes are isolated per user", async () => {
+  const plugin = new FederationPlugin();
+  const ctx = new MockPluginContext("drop-federation", [
+    "routes",
+    "storage",
+    "events",
+    "network",
+    "websocket",
+  ]);
+  await plugin.init(ctx);
+
+  const post = ctx.routes.get("POST /signaling/:instanceId")!;
+  const get = ctx.routes.get("GET /signaling/:instanceId")!;
+
+  await post.handler(
+    { body: { kind: "offer", payload: { sdp: "alice" } } } as any,
+    { params: { instanceId: "peer-1" }, query: {}, userId: "alice" },
+  );
+
+  // Another user must not see or drain alice's mailbox.
+  const bob = (await get.handler({} as any, {
+    params: { instanceId: "peer-1" },
+    query: {},
+    userId: "bob",
+  })) as any;
+  assert.equal(bob.count, 0);
+
+  const alice = (await get.handler({} as any, {
+    params: { instanceId: "peer-1" },
+    query: {},
+    userId: "alice",
+  })) as any;
+  assert.equal(alice.count, 1);
+});
+
+test("unsigned friend requests are rejected unless explicitly allowed", async () => {
+  const saved = process.env.DROP_FEDERATION_ALLOW_UNSIGNED_REQUESTS;
+  delete process.env.DROP_FEDERATION_ALLOW_UNSIGNED_REQUESTS;
+  try {
+    const plugin = new FederationPlugin();
+    const ctx = new MockPluginContext("drop-federation", [
+      "routes",
+      "storage",
+      "events",
+      "network",
+      "websocket",
+    ]);
+    await plugin.init(ctx);
+    const route = ctx.routes.get("POST /friends/request")!;
+    const res = (await route.handler(
+      {
+        body: {
+          remoteInstanceUrl: "https://unsigned.example",
+          targetUser: "alice",
+        },
+      } as any,
+      { params: {}, query: {} },
+    )) as any;
+    assert.equal(res.code, "signature_required");
+  } finally {
+    process.env.DROP_FEDERATION_ALLOW_UNSIGNED_REQUESTS = saved;
+  }
 });

@@ -1,4 +1,5 @@
 import type { PluginContext, ServerPlugin } from "@droposs/plugin-sdk";
+import { matchesBearerToken } from "./auth.js";
 import {
   fromStoredIdentity,
   generateInstanceIdentity,
@@ -50,13 +51,15 @@ import {
 import {
   enqueueMessage,
   parseSignalingMessage,
-  signalingKey,
+  signalingChannel,
+  signalingMailboxKey,
   type SignalingMessage,
 } from "./signaling.js";
 import {
   activePeers,
   applyPeerHeartbeat,
   applyPresenceUpdate,
+  isHeartbeatKeyConsistent,
   peerStorageKey,
   PEER_STORAGE_PREFIX,
   type PeerRecord,
@@ -65,6 +68,7 @@ import {
 } from "./presence.js";
 
 export * from "./descriptor.js";
+export * from "./auth.js";
 export * from "./friends.js";
 export * from "./identity.js";
 export * from "./keystore.js";
@@ -85,7 +89,13 @@ import {
 const INSTANCE_IDENTITY_KEY = "instance_identity";
 const ROTATIONS_STORAGE_KEY = "instance_rotations";
 const ADMIN_TOKEN_ENV = "DROP_FEDERATION_ADMIN_TOKEN";
+const ALLOW_UNSIGNED_ENV = "DROP_FEDERATION_ALLOW_UNSIGNED_REQUESTS";
 const API_VERSION = 2;
+
+/** Whether unsigned friend requests are explicitly permitted (dev/compat only). */
+function allowUnsignedRequests(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env[ALLOW_UNSIGNED_ENV] === "true";
+}
 
 /** Read the `Authorization` header from a plugin route event. */
 async function readAuthHeader(event: unknown): Promise<string | undefined> {
@@ -115,8 +125,7 @@ async function authorizedOperator(event: unknown): Promise<boolean> {
   const expected = process.env[ADMIN_TOKEN_ENV]?.trim();
   if (!expected) return false;
   const header = await readAuthHeader(event);
-  const [scheme, token] = (header ?? "").split(" ");
-  return scheme === "Bearer" && token === expected;
+  return matchesBearerToken(header, expected);
 }
 
 /** Peer-transport addresses advertised in the descriptor. */
@@ -253,8 +262,7 @@ export default class FederationPlugin implements ServerPlugin {
         };
       }
       const header = await readAuthHeader(event);
-      const [scheme, token] = (header ?? "").split(" ");
-      if (scheme !== "Bearer" || token !== expected) {
+      if (!matchesBearerToken(header, expected)) {
         return { error: "Unauthorized" };
       }
       if (!identity.privateKey) {
@@ -352,6 +360,13 @@ export default class FederationPlugin implements ServerPlugin {
           return { error: "invalid friend request signature" };
         }
         signatureVerified = true;
+      } else if (!allowUnsignedRequests()) {
+        return {
+          error:
+            "signed friend request required; provide signature and publicKey " +
+            `(or set ${ALLOW_UNSIGNED_ENV}=true to accept unsigned requests)`,
+          code: "signature_required",
+        };
       } else {
         ctx.logger.warn(
           `Friend request for ${remoteInstanceUrl} has no signature; ` +
@@ -679,11 +694,11 @@ export default class FederationPlugin implements ServerPlugin {
         );
         if (!message) return { error: "invalid signaling message" };
 
-        const key = signalingKey(target);
+        const key = signalingMailboxKey(routeCtx.userId, target);
         const queue =
           (await ctx.storage.get<SignalingMessage[]>(key)) ?? [];
         await ctx.storage.set(key, enqueueMessage(queue, message));
-        ctx.broadcast(`federation:signaling:${target}`, message);
+        ctx.broadcast(signalingChannel(routeCtx.userId, target), message);
         return { success: true };
       },
     );
@@ -697,7 +712,7 @@ export default class FederationPlugin implements ServerPlugin {
         }
         const target = routeCtx.params.instanceId;
         if (!target) return { error: "instanceId is required" };
-        const key = signalingKey(target);
+        const key = signalingMailboxKey(routeCtx.userId, target);
         const messages =
           (await ctx.storage.get<SignalingMessage[]>(key)) ?? [];
         await ctx.storage.set(key, []);
@@ -714,7 +729,7 @@ export default class FederationPlugin implements ServerPlugin {
         }
         const target = routeCtx.params.instanceId;
         if (!target) return { error: "instanceId is required" };
-        await ctx.storage.set(signalingKey(target), []);
+        await ctx.storage.set(signalingMailboxKey(routeCtx.userId, target), []);
         return { success: true };
       },
     );
@@ -748,14 +763,22 @@ export default class FederationPlugin implements ServerPlugin {
       if (update.instanceId && update.instanceId !== identity.instanceId) {
         const key = peerStorageKey(update.instanceId);
         const existingPeer = await ctx.storage.get<PeerRecord>(key);
-        const peer = applyPeerHeartbeat(existingPeer ?? undefined, {
-          instanceId: update.instanceId,
-          instanceUrl: update.instanceUrl,
-          publicKey: update.publicKey,
-          now: Date.now(),
-        });
-        await ctx.storage.set(key, peer);
-        ctx.broadcast("federation:peers:update", peer);
+        if (
+          isHeartbeatKeyConsistent(existingPeer ?? undefined, update.publicKey)
+        ) {
+          const peer = applyPeerHeartbeat(existingPeer ?? undefined, {
+            instanceId: update.instanceId,
+            instanceUrl: update.instanceUrl,
+            publicKey: update.publicKey,
+            now: Date.now(),
+          });
+          await ctx.storage.set(key, peer);
+          ctx.broadcast("federation:peers:update", peer);
+        } else {
+          ctx.logger.warn(
+            `Ignoring heartbeat for ${update.instanceId}: publicKey does not match the known peer key`,
+          );
+        }
       }
 
       wsCtx.send({ event: "presence_ack", instanceId: identity.instanceId });

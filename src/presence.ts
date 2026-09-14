@@ -95,6 +95,19 @@ export function applyPeerHeartbeat(
   };
 }
 
+/**
+ * Whether a heartbeat's `publicKey` is consistent with the known peer. A
+ * first-seen key is accepted (trust-on-first-use); a key that conflicts with the
+ * stored one is rejected so a peer cannot silently swap its key after contact.
+ */
+export function isHeartbeatKeyConsistent(
+  existing: PeerRecord | undefined,
+  publicKey?: string,
+): boolean {
+  if (!existing || !publicKey || !existing.publicKey) return true;
+  return existing.publicKey === publicKey;
+}
+
 /** Keeps only peers heard from within the freshness window. */
 export function activePeers(
   peers: PeerRecord[],

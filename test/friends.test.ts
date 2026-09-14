@@ -15,6 +15,9 @@ import FederationPlugin, {
   type FriendRequest,
 } from "../src/index.js";
 
+// Some tests exercise the legacy unsigned-request path.
+process.env.DROP_FEDERATION_ALLOW_UNSIGNED_REQUESTS = "true";
+
 function makeRequest(overrides: Partial<FriendRequest> = {}): FriendRequest {
   const now = 1000;
   return {
