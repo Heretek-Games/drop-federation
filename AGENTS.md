@@ -8,7 +8,7 @@
 
 - **`src/identity.ts`**: Ed25519 key generation and instance descriptor hashing.
 - **`src/moderation.ts`**: Peer block list (`BlockedPeer`) and a sliding-window rate limiter for abuse controls.
-- **`src/transport.ts`**: Direct peer dialing — URL normalization, descriptor fetch, and signature/instance-id verification (`dialPeer`).
+- **`src/transport.ts`**: Peer dialing — URL normalization, descriptor fetch/verification (`dialPeer`), a relay fallback (`dialPeerViaRelay`) and the direct-then-relay helper (`dialPeerWithRelay`).
 - **`src/rotation.ts`**: Key rotation certificates (`buildRotation`/`signRotation`/`verifyRotation`) and chain verification.
 - **`src/sharing.ts`**: Opt-in library sharing scopes (`normalizeSharingSettings`) and the visible-game filter (`visibleGames`).
 - **`src/index.ts`**: Plugin entry point implementing `ServerPlugin` with `/descriptor`, `/identity/*` (rotations/rotate), `/friends/*` (request/accept/reject/remove/block/unblock/blocked), `/odp/*`, `/sharing` + `/shared/library`, `/peers` and `/peers/dial` endpoints, and the `federation:presence` WebSocket channel.

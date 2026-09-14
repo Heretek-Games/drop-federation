@@ -42,8 +42,15 @@ export interface PeerDialResult {
   descriptor: SignedDescriptor;
 }
 
+export interface RelayDialResult extends PeerDialResult {
+  viaRelay: boolean;
+}
+
+/** Path a relay exposes to retransmit one peer document. */
+export const RELAY_PATH = "/relay/descriptor";
+
 /**
- * Fetch and verify a peer's signed descriptor.
+ * Fetch and verify a peer's descriptor.
  *
  * Throws on an invalid URL, a non-OK response, a missing signature, or a failed
  * signature/instance-id check — a peer is only trusted after verification.
@@ -81,4 +88,83 @@ export async function dialPeer(
   }
 
   return { url, descriptor };
+}
+
+/**
+ * Fetch a peer's descriptor through a relay that only retransmits it. The
+ * descriptor is still verified end to end, so a malicious relay can censor but
+ * not forge a peer. `target` is the peer's base URL (direct-dial address).
+ */
+export async function dialPeerViaRelay(
+  relayUrl: string,
+  targetUrl: string,
+  fetchImpl: FetchLike,
+  timeoutMs: number = DEFAULT_DIAL_TIMEOUT_MS,
+): Promise<PeerDialResult> {
+  const relay = normalizePeerUrl(relayUrl);
+  if (!relay) {
+    throw new Error("Relay URL must be a valid http(s) URL");
+  }
+  const target = normalizePeerUrl(targetUrl);
+  if (!target) {
+    throw new Error("Peer URL must be a valid http(s) URL");
+  }
+
+  const url = `${relay}${RELAY_PATH}?target=${encodeURIComponent(target)}`;
+  const response = await fetchImpl(url, {
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  if (!response.ok) {
+    throw new Error(`Relay descriptor request failed with HTTP ${response.status}`);
+  }
+
+  const payload = (await response.json()) as Partial<SignedDescriptor>;
+  if (
+    !payload ||
+    typeof payload.instanceId !== "string" ||
+    typeof payload.publicKey !== "string" ||
+    typeof payload.signature !== "string"
+  ) {
+    throw new Error("Relayed descriptor is missing required fields");
+  }
+
+  const descriptor = payload as SignedDescriptor;
+  if (!verifyDescriptor(descriptor, descriptor.signature)) {
+    throw new Error("Relayed descriptor signature is invalid");
+  }
+
+  return { url: target, descriptor };
+}
+
+/**
+ * Try a direct dial first; when it fails and a relay is configured, fall back
+ * to the relay. Returns whether the relay was used.
+ */
+export async function dialPeerWithRelay(
+  targetUrl: string,
+  options: {
+    relayUrl?: string;
+    fetchImpl: FetchLike;
+    timeoutMs?: number;
+  },
+): Promise<RelayDialResult> {
+  try {
+    const direct = await dialPeer(
+      targetUrl,
+      options.fetchImpl,
+      options.timeoutMs,
+    );
+    return { ...direct, viaRelay: false };
+  } catch (directError) {
+    if (!options.relayUrl) {
+      throw directError;
+    }
+    const relayed = await dialPeerViaRelay(
+      options.relayUrl,
+      targetUrl,
+      options.fetchImpl,
+      options.timeoutMs,
+    );
+    return { ...relayed, viaRelay: true };
+  }
 }

@@ -31,7 +31,7 @@ import {
 } from "./moderation.js";
 import { KEY_PASSPHRASE_ENV, resolveKeyPassphrase } from "./keystore.js";
 import {
-  dialPeer,
+  dialPeerWithRelay,
   normalizePeerUrl,
   type FetchLike,
 } from "./transport.js";
@@ -681,9 +681,10 @@ export default class FederationPlugin implements ServerPlugin {
         return { error: "url is required" };
       }
       try {
-        const { url: peerUrl, descriptor } = await dialPeer(
+        const relayUrl = process.env.DROP_FEDERATION_RELAY_URL?.trim() || undefined;
+        const { url: peerUrl, descriptor, viaRelay } = await dialPeerWithRelay(
           url,
-          ctx.fetch as unknown as FetchLike,
+          { relayUrl, fetchImpl: ctx.fetch as unknown as FetchLike },
         );
         const key = peerStorageKey(descriptor.instanceId);
         const existing = await ctx.storage.get<PeerRecord>(key);
@@ -695,7 +696,7 @@ export default class FederationPlugin implements ServerPlugin {
         });
         await ctx.storage.set(key, peer);
         ctx.broadcast("federation:peers:update", peer);
-        return { success: true, descriptor, peer };
+        return { success: true, descriptor, peer, viaRelay };
       } catch (error) {
         return {
           success: false,
