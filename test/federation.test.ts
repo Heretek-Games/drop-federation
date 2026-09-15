@@ -673,3 +673,86 @@ test("unsigned friend requests are rejected unless explicitly allowed", async ()
     process.env.DROP_FEDERATION_ALLOW_UNSIGNED_REQUESTS = saved;
   }
 });
+
+test("heartbeat keys are pinned and key rotation is gated by env", async () => {
+  const plugin = new FederationPlugin();
+  const ctx = new MockPluginContext("drop-federation", [
+    "routes",
+    "storage",
+    "events",
+    "network",
+    "websocket",
+  ]);
+  await plugin.init(ctx);
+
+  const wsHandler = ctx.wsHandlers.get("federation:presence");
+  assert.ok(wsHandler, "federation:presence websocket handler must be registered");
+
+  const warnings: string[] = [];
+  ctx.logger.warn = (message: string) => {
+    warnings.push(message);
+  };
+
+  await wsHandler(
+    {
+      instanceId: "pinned-peer",
+      instanceUrl: "https://pinned.example",
+      publicKey: "key-a",
+    },
+    { send: () => {} },
+  );
+  assert.equal(
+    await ctx.storage.get<string>("federation_pinned_key:pinned-peer"),
+    "key-a",
+  );
+
+  // A swapped key is rejected and the stored peer keeps the pinned key.
+  await wsHandler(
+    {
+      instanceId: "pinned-peer",
+      instanceUrl: "https://pinned.example",
+      publicKey: "key-b",
+    },
+    { send: () => {} },
+  );
+  const rejected = await ctx.storage.get<{ publicKey?: string }>(
+    "presence:peer:pinned-peer",
+  );
+  assert.equal(rejected?.publicKey, "key-a");
+  assert.ok(
+    warnings.some((message) =>
+      message.includes("does not match the pinned key"),
+    ),
+  );
+
+  const previous = process.env.FEDERATION_ALLOW_KEY_ROTATION;
+  process.env.FEDERATION_ALLOW_KEY_ROTATION = "true";
+  try {
+    await wsHandler(
+      {
+        instanceId: "pinned-peer",
+        instanceUrl: "https://pinned.example",
+        publicKey: "key-b",
+      },
+      { send: () => {} },
+    );
+  } finally {
+    if (previous === undefined) {
+      delete process.env.FEDERATION_ALLOW_KEY_ROTATION;
+    } else {
+      process.env.FEDERATION_ALLOW_KEY_ROTATION = previous;
+    }
+  }
+
+  assert.equal(
+    await ctx.storage.get<string>("federation_pinned_key:pinned-peer"),
+    "key-b",
+  );
+  const rotated = await ctx.storage.get<{ publicKey?: string }>(
+    "presence:peer:pinned-peer",
+  );
+  assert.equal(rotated?.publicKey, "key-b");
+  assert.ok(
+    warnings.some((message) => message.includes("Re-pinning public key")),
+  );
+});

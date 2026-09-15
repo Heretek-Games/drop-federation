@@ -108,6 +108,55 @@ export function isHeartbeatKeyConsistent(
   return existing.publicKey === publicKey;
 }
 
+/** Env flag that explicitly permits a peer to rotate its heartbeat key. */
+export const ALLOW_KEY_ROTATION_ENV = "FEDERATION_ALLOW_KEY_ROTATION";
+
+/** Whether heartbeat key rotation is explicitly permitted (default: off). */
+export function allowHeartbeatKeyRotation(
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return env[ALLOW_KEY_ROTATION_ENV] === "true";
+}
+
+/** Prefix under which the first-seen public key of a peer is pinned. */
+export const PINNED_KEY_STORAGE_PREFIX = "federation_pinned_key:";
+
+/** Stable storage key for an instance's pinned heartbeat public key. */
+export function pinnedKeyStorageKey(instanceId: string): string {
+  return `${PINNED_KEY_STORAGE_PREFIX}${instanceId}`;
+}
+
+export interface HeartbeatKeyDecision {
+  accepted: boolean;
+  pin?: string;
+  rePinned: boolean;
+}
+
+/**
+ * Compares an incoming heartbeat key with the pinned key for that instance.
+ * The first key seen is pinned; a mismatch is rejected unless rotation is
+ * explicitly allowed, in which case the caller re-pins the new key.
+ */
+export function decideHeartbeatKey(
+  pinnedKey: string | null | undefined,
+  incomingKey?: string,
+  allowRotation: boolean = false,
+): HeartbeatKeyDecision {
+  if (!incomingKey) {
+    return { accepted: true, pin: pinnedKey ?? undefined, rePinned: false };
+  }
+  if (!pinnedKey) {
+    return { accepted: true, pin: incomingKey, rePinned: false };
+  }
+  if (pinnedKey === incomingKey) {
+    return { accepted: true, pin: pinnedKey, rePinned: false };
+  }
+  if (allowRotation) {
+    return { accepted: true, pin: incomingKey, rePinned: true };
+  }
+  return { accepted: false, pin: pinnedKey, rePinned: false };
+}
+
 /** Keeps only peers heard from within the freshness window. */
 export function activePeers(
   peers: PeerRecord[],

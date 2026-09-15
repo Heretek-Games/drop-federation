@@ -10,6 +10,7 @@ import FederationPlugin, {
   listFriendRequests,
   signFriendRequest,
   upsertFriendRequest,
+  usedSignatureStorageKey,
   verifyFriendRequest,
   verifyFriendRequestSignature,
   type FriendRequest,
@@ -128,7 +129,7 @@ test("plugin persists signed friend requests and verifies them", async () => {
     remoteInstanceUrl: "https://drop.example.com",
     targetUser: "alice",
     remoteInstanceId: identity.instanceId,
-    timestamp: 1000,
+    timestamp: Date.now(),
   };
   const signature = signFriendRequest(payload, identity.privateKey ?? "");
 
@@ -318,4 +319,124 @@ test("plugin records remote presence peers and lists only fresh ones", async () 
     query: {},
   })) as any;
   assert.equal(filtered.count, 1);
+});
+
+test("signed friend requests require a numeric timestamp", async () => {
+  const plugin = new FederationPlugin();
+  const ctx = new MockPluginContext("drop-federation", [
+    "routes",
+    "storage",
+    "events",
+    "network",
+    "websocket",
+  ]);
+  await plugin.init(ctx);
+  const route = ctx.routes.get("POST /friends/request")!;
+
+  const identity = generateInstanceIdentity();
+  const missing = (await route.handler(
+    {
+      body: {
+        remoteInstanceUrl: "https://missing-timestamp.example",
+        targetUser: "alice",
+        remoteInstanceId: identity.instanceId,
+        publicKey: identity.publicKey,
+        signature: "placeholder",
+      },
+    } as any,
+    { params: {}, query: {} },
+  )) as any;
+  assert.equal(missing.code, "signature_timestamp_required");
+  assert.match(missing.error, /numeric timestamp/);
+
+  const stored = await ctx.storage.get<FriendRequest[]>(FRIENDS_STORAGE_KEY);
+  assert.equal(stored?.length ?? 0, 0);
+});
+
+test("signed friend requests outside the freshness window are rejected", async () => {
+  const plugin = new FederationPlugin();
+  const ctx = new MockPluginContext("drop-federation", [
+    "routes",
+    "storage",
+    "events",
+    "network",
+    "websocket",
+  ]);
+  await plugin.init(ctx);
+  const route = ctx.routes.get("POST /friends/request")!;
+
+  const identity = generateInstanceIdentity();
+  const skews = [
+    ["expired", -10 * 60 * 1000],
+    ["future", 10 * 60 * 1000],
+  ] as const;
+
+  for (const [label, skew] of skews) {
+    const payload = {
+      remoteInstanceUrl: `https://${label}.example`,
+      targetUser: "alice",
+      remoteInstanceId: identity.instanceId,
+      timestamp: Date.now() + skew,
+    };
+    const response = (await route.handler(
+      {
+        body: {
+          ...payload,
+          publicKey: identity.publicKey,
+          signature: signFriendRequest(payload, identity.privateKey ?? ""),
+        },
+      } as any,
+      { params: {}, query: {} },
+    )) as any;
+    assert.equal(response.code, "signature_expired", `${label} timestamp`);
+    assert.equal(response.error, "signature expired");
+  }
+
+  const stored = await ctx.storage.get<FriendRequest[]>(FRIENDS_STORAGE_KEY);
+  assert.equal(stored?.length ?? 0, 0);
+});
+
+test("replayed signed friend requests are rejected", async () => {
+  const plugin = new FederationPlugin();
+  const ctx = new MockPluginContext("drop-federation", [
+    "routes",
+    "storage",
+    "events",
+    "network",
+    "websocket",
+  ]);
+  await plugin.init(ctx);
+  const route = ctx.routes.get("POST /friends/request")!;
+
+  const identity = generateInstanceIdentity();
+  const payload = {
+    remoteInstanceUrl: "https://replay.example",
+    targetUser: "alice",
+    remoteInstanceId: identity.instanceId,
+    timestamp: Date.now(),
+  };
+  const signature = signFriendRequest(payload, identity.privateKey ?? "");
+  const body = { ...payload, publicKey: identity.publicKey, signature };
+
+  const first = (await route.handler({ body } as any, {
+    params: {},
+    query: {},
+  })) as any;
+  assert.equal(first.success, true);
+
+  const usedUntil = await ctx.storage.get<number>(
+    usedSignatureStorageKey(signature),
+  );
+  assert.equal(typeof usedUntil, "number");
+  assert.ok((usedUntil ?? 0) > Date.now());
+
+  const second = (await route.handler({ body } as any, {
+    params: {},
+    query: {},
+  })) as any;
+  assert.equal(second.code, "signature_replayed");
+  assert.equal(second.error, "signature already used");
+
+  const stored = await ctx.storage.get<FriendRequest[]>(FRIENDS_STORAGE_KEY);
+  assert.equal(stored?.length, 1);
 });

@@ -14,6 +14,16 @@ import { createHash, createPublicKey, sign, verify } from "node:crypto";
 
 export const FRIENDS_STORAGE_KEY = "friends:requests";
 
+/** Prefix under which used (replay-protected) request signatures are tracked. */
+export const USED_SIGNATURE_STORAGE_PREFIX = "federation_used_signature:";
+
+/** Storage key for a one-time friend request signature (SHA-256 of the base64). */
+export function usedSignatureStorageKey(signatureBase64: string): string {
+  return `${USED_SIGNATURE_STORAGE_PREFIX}${createHash("sha256")
+    .update(signatureBase64)
+    .digest("hex")}`;
+}
+
 export type FriendRequestStatus = "pending" | "accepted" | "rejected";
 export type FriendRequestDirection = "incoming" | "outgoing";
 

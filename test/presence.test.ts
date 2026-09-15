@@ -2,8 +2,11 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   activePresence,
+  allowHeartbeatKeyRotation,
   applyPresenceUpdate,
+  decideHeartbeatKey,
   isHeartbeatKeyConsistent,
+  pinnedKeyStorageKey,
   type PresenceRecord,
 } from "../src/index.js";
 
@@ -59,4 +62,44 @@ test("isHeartbeatKeyConsistent rejects key substitution after first contact", ()
   // Same key is allowed; a conflicting key is rejected.
   assert.equal(isHeartbeatKeyConsistent(peer, "key-a"), true);
   assert.equal(isHeartbeatKeyConsistent(peer, "key-b"), false);
+});
+
+test("decideHeartbeatKey pins first use and gates key changes", () => {
+  // First contact is pinned; the same key stays accepted.
+  assert.deepEqual(decideHeartbeatKey(undefined, "key-a"), {
+    accepted: true,
+    pin: "key-a",
+    rePinned: false,
+  });
+  assert.deepEqual(decideHeartbeatKey("key-a", "key-a"), {
+    accepted: true,
+    pin: "key-a",
+    rePinned: false,
+  });
+  // A changed key is rejected unless rotation is explicitly allowed.
+  assert.deepEqual(decideHeartbeatKey("key-a", "key-b"), {
+    accepted: false,
+    pin: "key-a",
+    rePinned: false,
+  });
+  assert.deepEqual(decideHeartbeatKey("key-a", "key-b", true), {
+    accepted: true,
+    pin: "key-b",
+    rePinned: true,
+  });
+  // Heartbeats without a key assertion keep the existing pin.
+  assert.deepEqual(decideHeartbeatKey("key-a", undefined), {
+    accepted: true,
+    pin: "key-a",
+    rePinned: false,
+  });
+
+  assert.equal(pinnedKeyStorageKey("inst-a"), "federation_pinned_key:inst-a");
+  assert.equal(allowHeartbeatKeyRotation({} as NodeJS.ProcessEnv), false);
+  assert.equal(
+    allowHeartbeatKeyRotation({
+      FEDERATION_ALLOW_KEY_ROTATION: "true",
+    } as NodeJS.ProcessEnv),
+    true,
+  );
 });
