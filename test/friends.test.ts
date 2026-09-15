@@ -36,6 +36,26 @@ function makeRequest(overrides: Partial<FriendRequest> = {}): FriendRequest {
   };
 }
 
+async function initFriendRequestRoute() {
+  const plugin = new FederationPlugin();
+  const ctx = new MockPluginContext("drop-federation", [
+    "routes",
+    "storage",
+    "events",
+    "network",
+    "websocket",
+  ]);
+  await plugin.init(ctx);
+  const route = ctx.routes.get("POST /friends/request")!;
+  return {
+    ctx,
+    route,
+    requestRoute: route,
+    acceptRoute: ctx.routes.get("POST /friends/accept")!,
+    rejectRoute: ctx.routes.get("POST /friends/reject")!,
+  };
+}
+
 test("friendRequestId is deterministic and distinct per peer", () => {
   assert.equal(
     friendRequestId("https://a.example", "alice"),
@@ -105,18 +125,7 @@ test("upsert/find/list helpers maintain the request lifecycle", () => {
 });
 
 test("plugin persists signed friend requests and verifies them", async () => {
-  const plugin = new FederationPlugin();
-  const ctx = new MockPluginContext("drop-federation", [
-      "routes",
-      "storage",
-      "events",
-      "network",
-      "websocket",
-    ]);
-  await plugin.init(ctx);
-
-  const route = ctx.routes.get("POST /friends/request");
-  assert.ok(route);
+  const { ctx, route } = await initFriendRequestRoute();
 
   let broadcasted: any = null;
   ctx.eventListeners.set(
@@ -151,16 +160,7 @@ test("plugin persists signed friend requests and verifies them", async () => {
 });
 
 test("plugin rejects unsigned signature claims, missing URLs and tampered signatures", async () => {
-  const plugin = new FederationPlugin();
-  const ctx = new MockPluginContext("drop-federation", [
-      "routes",
-      "storage",
-      "events",
-      "network",
-      "websocket",
-    ]);
-  await plugin.init(ctx);
-  const route = ctx.routes.get("POST /friends/request")!;
+  const { ctx, route } = await initFriendRequestRoute();
 
   const missing = (await route.handler({ body: {} } as any, {
     params: {},
@@ -177,7 +177,10 @@ test("plugin rejects unsigned signature claims, missing URLs and tampered signat
     } as any,
     { params: {}, query: {} },
   )) as any;
-  assert.equal(halfSigned.error, "signature and publicKey must be provided together");
+  assert.equal(
+    halfSigned.error,
+    "signature and publicKey must be provided together",
+  );
 
   const identity = generateInstanceIdentity();
   const signature = signFriendRequest(
@@ -207,19 +210,8 @@ test("plugin rejects unsigned signature claims, missing URLs and tampered signat
 });
 
 test("plugin accepts and rejects persisted friend requests", async () => {
-  const plugin = new FederationPlugin();
-  const ctx = new MockPluginContext("drop-federation", [
-      "routes",
-      "storage",
-      "events",
-      "network",
-      "websocket",
-    ]);
-  await plugin.init(ctx);
-
-  const requestRoute = ctx.routes.get("POST /friends/request")!;
-  const acceptRoute = ctx.routes.get("POST /friends/accept")!;
-  const rejectRoute = ctx.routes.get("POST /friends/reject")!;
+  const { ctx, requestRoute, acceptRoute, rejectRoute } =
+    await initFriendRequestRoute();
 
   const created = (await requestRoute.handler(
     {
@@ -284,14 +276,7 @@ test("plugin accepts and rejects persisted friend requests", async () => {
 });
 
 test("plugin records remote presence peers and lists only fresh ones", async () => {
-  const plugin = new FederationPlugin();
-  const ctx = new MockPluginContext("drop-federation", [
-    "routes",
-    "storage",
-    "events",
-    "websocket",
-  ]);
-  await plugin.init(ctx);
+  const { ctx } = await initFriendRequestRoute();
 
   const wsHandler = ctx.wsHandlers.get("federation:presence")!;
   await wsHandler(
@@ -322,16 +307,7 @@ test("plugin records remote presence peers and lists only fresh ones", async () 
 });
 
 test("signed friend requests require a numeric timestamp", async () => {
-  const plugin = new FederationPlugin();
-  const ctx = new MockPluginContext("drop-federation", [
-    "routes",
-    "storage",
-    "events",
-    "network",
-    "websocket",
-  ]);
-  await plugin.init(ctx);
-  const route = ctx.routes.get("POST /friends/request")!;
+  const { ctx, route } = await initFriendRequestRoute();
 
   const identity = generateInstanceIdentity();
   const missing = (await route.handler(
@@ -354,16 +330,7 @@ test("signed friend requests require a numeric timestamp", async () => {
 });
 
 test("signed friend requests outside the freshness window are rejected", async () => {
-  const plugin = new FederationPlugin();
-  const ctx = new MockPluginContext("drop-federation", [
-    "routes",
-    "storage",
-    "events",
-    "network",
-    "websocket",
-  ]);
-  await plugin.init(ctx);
-  const route = ctx.routes.get("POST /friends/request")!;
+  const { ctx, route } = await initFriendRequestRoute();
 
   const identity = generateInstanceIdentity();
   const skews = [
@@ -397,16 +364,7 @@ test("signed friend requests outside the freshness window are rejected", async (
 });
 
 test("replayed signed friend requests are rejected", async () => {
-  const plugin = new FederationPlugin();
-  const ctx = new MockPluginContext("drop-federation", [
-    "routes",
-    "storage",
-    "events",
-    "network",
-    "websocket",
-  ]);
-  await plugin.init(ctx);
-  const route = ctx.routes.get("POST /friends/request")!;
+  const { ctx, route } = await initFriendRequestRoute();
 
   const identity = generateInstanceIdentity();
   const payload = {
