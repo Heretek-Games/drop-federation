@@ -1,4 +1,5 @@
 import type { PluginContext, ServerPlugin } from "@droposs/plugin-sdk";
+import { matchesBearerToken } from "./auth.js";
 import {
   fromStoredIdentity,
   generateInstanceIdentity,
@@ -17,7 +18,9 @@ import {
   listFriendRequests,
   removeFriendRequest,
   upsertFriendRequest,
+  usedSignatureStorageKey,
   verifyFriendRequestSignature,
+  USED_SIGNATURE_STORAGE_PREFIX,
   type FriendRequest,
   type FriendRequestStatus,
 } from "./friends.js";
@@ -50,21 +53,27 @@ import {
 import {
   enqueueMessage,
   parseSignalingMessage,
-  signalingKey,
+  signalingChannel,
+  signalingMailboxKey,
   type SignalingMessage,
 } from "./signaling.js";
 import {
   activePeers,
+  ALLOW_KEY_ROTATION_ENV,
+  allowHeartbeatKeyRotation,
   applyPeerHeartbeat,
   applyPresenceUpdate,
+  decideHeartbeatKey,
   peerStorageKey,
   PEER_STORAGE_PREFIX,
+  pinnedKeyStorageKey,
   type PeerRecord,
   type PresenceRecord,
   type PresenceStatus,
 } from "./presence.js";
 
 export * from "./descriptor.js";
+export * from "./auth.js";
 export * from "./friends.js";
 export * from "./identity.js";
 export * from "./keystore.js";
@@ -85,7 +94,23 @@ import {
 const INSTANCE_IDENTITY_KEY = "instance_identity";
 const ROTATIONS_STORAGE_KEY = "instance_rotations";
 const ADMIN_TOKEN_ENV = "DROP_FEDERATION_ADMIN_TOKEN";
+const ALLOW_UNSIGNED_ENV = "DROP_FEDERATION_ALLOW_UNSIGNED_REQUESTS";
+const MAX_SIGNATURE_SKEW_ENV = "FEDERATION_MAX_SIGNATURE_SKEW_MS";
+const DEFAULT_MAX_SIGNATURE_SKEW_MS = 5 * 60 * 1000;
 const API_VERSION = 2;
+
+/** Whether unsigned friend requests are explicitly permitted (dev/compat only). */
+function allowUnsignedRequests(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env[ALLOW_UNSIGNED_ENV] === "true";
+}
+
+/** Maximum accepted clock skew for signed request timestamps (5 min default). */
+function maxSignatureSkewMs(env: NodeJS.ProcessEnv = process.env): number {
+  const parsed = Number(env[MAX_SIGNATURE_SKEW_ENV]);
+  return Number.isFinite(parsed) && parsed > 0
+    ? parsed
+    : DEFAULT_MAX_SIGNATURE_SKEW_MS;
+}
 
 /** Read the `Authorization` header from a plugin route event. */
 async function readAuthHeader(event: unknown): Promise<string | undefined> {
@@ -115,8 +140,7 @@ async function authorizedOperator(event: unknown): Promise<boolean> {
   const expected = process.env[ADMIN_TOKEN_ENV]?.trim();
   if (!expected) return false;
   const header = await readAuthHeader(event);
-  const [scheme, token] = (header ?? "").split(" ");
-  return scheme === "Bearer" && token === expected;
+  return matchesBearerToken(header, expected);
 }
 
 /** Peer-transport addresses advertised in the descriptor. */
@@ -253,8 +277,7 @@ export default class FederationPlugin implements ServerPlugin {
         };
       }
       const header = await readAuthHeader(event);
-      const [scheme, token] = (header ?? "").split(" ");
-      if (scheme !== "Bearer" || token !== expected) {
+      if (!matchesBearerToken(header, expected)) {
         return { error: "Unauthorized" };
       }
       if (!identity.privateKey) {
@@ -333,15 +356,21 @@ export default class FederationPlugin implements ServerPlugin {
         return { error: "Instance is blocked", code: "blocked" };
       }
 
-      const timestamp =
-        typeof (body as any).timestamp === "number"
-          ? (body as any).timestamp
-          : Date.now();
+      const rawTimestamp = (body as { timestamp?: unknown }).timestamp;
+      let timestamp =
+        typeof rawTimestamp === "number" ? rawTimestamp : Date.now();
       let signatureVerified = false;
       if (signature || publicKey) {
         if (!signature || !publicKey) {
           return { error: "signature and publicKey must be provided together" };
         }
+        if (typeof rawTimestamp !== "number" || !Number.isFinite(rawTimestamp)) {
+          return {
+            error: "signed friend requests require a numeric timestamp",
+            code: "signature_timestamp_required",
+          };
+        }
+        timestamp = rawTimestamp;
         const payload = {
           remoteInstanceUrl,
           targetUser,
@@ -351,7 +380,38 @@ export default class FederationPlugin implements ServerPlugin {
         if (!verifyFriendRequestSignature(payload, signature, publicKey)) {
           return { error: "invalid friend request signature" };
         }
+
+        const nowMs = Date.now();
+        const maxSkewMs = maxSignatureSkewMs();
+        if (Math.abs(nowMs - timestamp) > maxSkewMs) {
+          return { error: "signature expired", code: "signature_expired" };
+        }
+
+        // Replay guard: each valid signature may only be used once. Expired
+        // entries are swept opportunistically while checking the new one.
+        const usedKey = usedSignatureStorageKey(signature);
+        const storedKeys = await ctx.storage.listKeys();
+        for (const candidate of storedKeys.filter((key) =>
+          key.startsWith(USED_SIGNATURE_STORAGE_PREFIX),
+        )) {
+          const expiresAt = await ctx.storage.get<number>(candidate);
+          if (typeof expiresAt !== "number" || expiresAt <= nowMs) {
+            await ctx.storage.delete(candidate);
+          }
+        }
+        const usedUntil = await ctx.storage.get<number>(usedKey);
+        if (typeof usedUntil === "number" && usedUntil > nowMs) {
+          return { error: "signature already used", code: "signature_replayed" };
+        }
+        await ctx.storage.set(usedKey, timestamp + 2 * maxSkewMs);
         signatureVerified = true;
+      } else if (!allowUnsignedRequests()) {
+        return {
+          error:
+            "signed friend request required; provide signature and publicKey " +
+            `(or set ${ALLOW_UNSIGNED_ENV}=true to accept unsigned requests)`,
+          code: "signature_required",
+        };
       } else {
         ctx.logger.warn(
           `Friend request for ${remoteInstanceUrl} has no signature; ` +
@@ -679,11 +739,11 @@ export default class FederationPlugin implements ServerPlugin {
         );
         if (!message) return { error: "invalid signaling message" };
 
-        const key = signalingKey(target);
+        const key = signalingMailboxKey(routeCtx.userId, target);
         const queue =
           (await ctx.storage.get<SignalingMessage[]>(key)) ?? [];
         await ctx.storage.set(key, enqueueMessage(queue, message));
-        ctx.broadcast(`federation:signaling:${target}`, message);
+        ctx.broadcast(signalingChannel(routeCtx.userId, target), message);
         return { success: true };
       },
     );
@@ -697,7 +757,7 @@ export default class FederationPlugin implements ServerPlugin {
         }
         const target = routeCtx.params.instanceId;
         if (!target) return { error: "instanceId is required" };
-        const key = signalingKey(target);
+        const key = signalingMailboxKey(routeCtx.userId, target);
         const messages =
           (await ctx.storage.get<SignalingMessage[]>(key)) ?? [];
         await ctx.storage.set(key, []);
@@ -714,7 +774,7 @@ export default class FederationPlugin implements ServerPlugin {
         }
         const target = routeCtx.params.instanceId;
         if (!target) return { error: "instanceId is required" };
-        await ctx.storage.set(signalingKey(target), []);
+        await ctx.storage.set(signalingMailboxKey(routeCtx.userId, target), []);
         return { success: true };
       },
     );
@@ -748,14 +808,38 @@ export default class FederationPlugin implements ServerPlugin {
       if (update.instanceId && update.instanceId !== identity.instanceId) {
         const key = peerStorageKey(update.instanceId);
         const existingPeer = await ctx.storage.get<PeerRecord>(key);
-        const peer = applyPeerHeartbeat(existingPeer ?? undefined, {
-          instanceId: update.instanceId,
-          instanceUrl: update.instanceUrl,
-          publicKey: update.publicKey,
-          now: Date.now(),
-        });
-        await ctx.storage.set(key, peer);
-        ctx.broadcast("federation:peers:update", peer);
+        const pinnedKeyStorage = pinnedKeyStorageKey(update.instanceId);
+        const pinnedKey =
+          (await ctx.storage.get<string>(pinnedKeyStorage)) ??
+          existingPeer?.publicKey;
+        const decision = decideHeartbeatKey(
+          pinnedKey,
+          update.publicKey,
+          allowHeartbeatKeyRotation(),
+        );
+        if (!decision.accepted) {
+          ctx.logger.warn(
+            `Ignoring heartbeat for ${update.instanceId}: publicKey does not match the pinned key`,
+          );
+        } else {
+          if (decision.rePinned) {
+            ctx.logger.warn(
+              `Re-pinning public key for ${update.instanceId}: key changed and ` +
+                `${ALLOW_KEY_ROTATION_ENV}=true allows rotation`,
+            );
+          }
+          if (decision.pin && decision.pin !== pinnedKey) {
+            await ctx.storage.set(pinnedKeyStorage, decision.pin);
+          }
+          const peer = applyPeerHeartbeat(existingPeer ?? undefined, {
+            instanceId: update.instanceId,
+            instanceUrl: update.instanceUrl,
+            publicKey: update.publicKey,
+            now: Date.now(),
+          });
+          await ctx.storage.set(key, peer);
+          ctx.broadcast("federation:peers:update", peer);
+        }
       }
 
       wsCtx.send({ event: "presence_ack", instanceId: identity.instanceId });

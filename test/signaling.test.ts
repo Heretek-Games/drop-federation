@@ -5,7 +5,9 @@ import {
   MAX_SIGNALING_QUEUE,
   enqueueMessage,
   parseSignalingMessage,
+  signalingChannel,
   signalingKey,
+  signalingMailboxKey,
   type SignalingMessage,
 } from "../src/index.js";
 
@@ -49,4 +51,13 @@ test("enqueueMessage caps the mailbox at the most recent messages", () => {
 
 test("signalingKey namespaces per instance", () => {
   assert.equal(signalingKey("abc"), "signaling:abc");
+});
+
+test("signalingMailboxKey and signalingChannel are user-scoped", () => {
+  assert.equal(signalingMailboxKey("u1", "peer-1"), "signaling:user:u1:peer-1");
+  assert.notEqual(
+    signalingMailboxKey("u1", "peer-1"),
+    signalingMailboxKey("u2", "peer-1"),
+  );
+  assert.equal(signalingChannel("u1", "peer-1"), "federation:signaling:u1:peer-1");
 });

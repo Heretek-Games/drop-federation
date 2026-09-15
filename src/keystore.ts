@@ -26,6 +26,7 @@ const SEALED_SECRET_VERSION = 1 as const;
 const SCRYPT_KEY_LENGTH = 32;
 const SALT_BYTES = 16;
 const IV_BYTES = 12;
+const GCM_TAG_BYTES = 16;
 
 export interface SealedSecret {
   version: typeof SEALED_SECRET_VERSION;
@@ -68,7 +69,9 @@ export function sealSecret(plaintext: string, passphrase: string): SealedSecret 
   const salt = randomBytes(SALT_BYTES);
   const iv = randomBytes(IV_BYTES);
   const key = scryptSync(passphrase, salt, SCRYPT_KEY_LENGTH);
-  const cipher = createCipheriv("aes-256-gcm", key, iv);
+  const cipher = createCipheriv("aes-256-gcm", key, iv, {
+    authTagLength: GCM_TAG_BYTES,
+  });
   const ciphertext = Buffer.concat([
     cipher.update(plaintext, "utf8"),
     cipher.final(),
@@ -94,12 +97,17 @@ export function openSecret(sealed: SealedSecret, passphrase: string): string {
     Buffer.from(sealed.salt, "base64"),
     SCRYPT_KEY_LENGTH,
   );
+  const tag = Buffer.from(sealed.tag, "base64");
+  if (tag.length !== GCM_TAG_BYTES) {
+    throw new Error("Unsupported sealed secret auth tag length");
+  }
   const decipher = createDecipheriv(
     "aes-256-gcm",
     key,
     Buffer.from(sealed.iv, "base64"),
+    { authTagLength: GCM_TAG_BYTES },
   );
-  decipher.setAuthTag(Buffer.from(sealed.tag, "base64"));
+  decipher.setAuthTag(tag);
   return Buffer.concat([
     decipher.update(Buffer.from(sealed.ciphertext, "base64")),
     decipher.final(),

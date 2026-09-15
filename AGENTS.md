@@ -20,4 +20,6 @@
 ## 2. Invariants
 
 - **Key Protection**: `privateKey` must remain exclusively in encrypted/guarded plugin storage and never be surfaced over the network.
-- **Cryptographic Verification**: Always verify signatures against remote instance public keys before accepting federated state updates.
+- **Cryptographic Verification**: Always verify signatures against remote instance public keys before accepting federated state updates. Unsigned friend requests are rejected by default (`DROP_FEDERATION_ALLOW_UNSIGNED_REQUESTS` is a dev-only opt-out).
+- **Constant-time auth**: Compare operator/bearer tokens with `matchesBearerToken`/`safeEqual`, never `===`.
+- **Mailbox isolation**: Signaling storage keys and broadcast channels are scoped per authenticated `userId` (`signalingMailboxKey`/`signalingChannel`).
