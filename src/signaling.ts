@@ -23,10 +23,6 @@ export interface SignalingMessage {
 export const MAX_SIGNALING_PAYLOAD_BYTES = 64 * 1024;
 export const MAX_SIGNALING_QUEUE = 64;
 
-/** Storage key for a target instance's mailbox. */
-export function signalingKey(instanceId: string): string {
-  return `signaling:${instanceId}`;
-}
 
 /**
  * Storage key for a single user's mailbox with a target instance. Mailboxes are

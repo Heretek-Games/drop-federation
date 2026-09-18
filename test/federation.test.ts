@@ -128,6 +128,75 @@ test("FederationPlugin initializes identity and registers routes and webhooks", 
   });
 });
 
+test("federation registers subscription authorizers for presence and signaling", async () => {
+  const plugin = new FederationPlugin();
+  const ctx = new MockPluginContext("drop-federation", [
+    "routes",
+    "storage",
+    "events",
+    "network",
+    "websocket",
+  ]);
+  await plugin.init(ctx);
+
+  assert.equal(
+    ctx.authorizers.length,
+    2,
+    "two subscription authorizers must be registered",
+  );
+
+  const [presenceAuth, signalingAuth] = ctx.authorizers;
+
+  // Presence/peers/friends authorizer
+  assert.equal(presenceAuth.matches("federation:presence"), true);
+  assert.equal(presenceAuth.matches("federation:presence:update"), true);
+  assert.equal(presenceAuth.matches("federation:peers:update"), true);
+  assert.equal(presenceAuth.matches("federation:friends"), true);
+  assert.equal(presenceAuth.matches("federation:signaling:u1:inst"), false);
+  assert.equal(presenceAuth.matches("other:channel"), false);
+
+  assert.equal(
+    await presenceAuth.auth("federation:presence", {
+      userId: undefined,
+      userAcls: undefined,
+    }),
+    false,
+  );
+  assert.equal(
+    await presenceAuth.auth("federation:presence", {
+      userId: "u1",
+      userAcls: undefined,
+    }),
+    true,
+  );
+
+  // Signaling authorizer
+  assert.equal(signalingAuth.matches("federation:signaling:u1:target"), true);
+  assert.equal(signalingAuth.matches("federation:presence"), false);
+
+  assert.equal(
+    await signalingAuth.auth("federation:signaling:u1:target", {
+      userId: undefined,
+      userAcls: undefined,
+    }),
+    false,
+  );
+  assert.equal(
+    await signalingAuth.auth("federation:signaling:u1:target", {
+      userId: "u2",
+      userAcls: undefined,
+    }),
+    false,
+  );
+  assert.equal(
+    await signalingAuth.auth("federation:signaling:u1:target", {
+      userId: "u1",
+      userAcls: undefined,
+    }),
+    true,
+  );
+});
+
 test("federation moderation routes block, revoke and unblock peers", async () => {
   const plugin = new FederationPlugin();
   const ctx = new MockPluginContext("drop-federation", [

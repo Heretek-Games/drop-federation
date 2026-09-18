@@ -1,4 +1,8 @@
-import type { PluginContext, ServerPlugin } from "@droposs/plugin-sdk";
+import type {
+  PluginContext,
+  ServerPlugin,
+  SubscriptionContext,
+} from "@droposs/plugin-sdk";
 import { matchesBearerToken } from "./auth.js";
 import {
   fromStoredIdentity,
@@ -483,6 +487,12 @@ export default class FederationPlugin implements ServerPlugin {
 
     // REST: list friends/requests, optionally filtered by status
     ctx.registerRoute("GET", "/friends", async (_event, routeCtx) => {
+      if (!routeCtx?.userId) {
+        return {
+          error: "Authentication required to list friends",
+          code: "unauthorized" as const,
+        };
+      }
       const rawStatus = Array.isArray(routeCtx?.query?.status)
         ? routeCtx.query.status[0]
         : routeCtx?.query?.status;
@@ -776,6 +786,24 @@ export default class FederationPlugin implements ServerPlugin {
         if (!target) return { error: "instanceId is required" };
         await ctx.storage.set(signalingMailboxKey(routeCtx.userId, target), []);
         return { success: true };
+      },
+    );
+
+    // WebSocket: authorize subscriptions to presence and federation channels
+    ctx.registerSubscriptionAuthorizer(
+      (channel) =>
+        channel === "federation:presence" ||
+        channel.startsWith("federation:presence:") ||
+        channel.startsWith("federation:peers:") ||
+        channel.startsWith("federation:friends"),
+      (_channel, context: SubscriptionContext) => Boolean(context.userId),
+    );
+    ctx.registerSubscriptionAuthorizer(
+      (channel) => channel.startsWith("federation:signaling:"),
+      (channel, context: SubscriptionContext) => {
+        if (!context.userId) return false;
+        const parts = channel.split(":");
+        return parts[2] === context.userId;
       },
     );
 

@@ -261,15 +261,23 @@ test("plugin accepts and rejects persisted friend requests", async () => {
   assert.equal(rejected.request.status, "rejected");
 
   const listRoute = ctx.routes.get("GET /friends")!;
+  const unauth = (await listRoute.handler({} as any, {
+    params: {},
+    query: {},
+  })) as any;
+  assert.equal(unauth.code, "unauthorized");
+
   const all = (await listRoute.handler({} as any, {
     params: {},
     query: {},
+    userId: "user-1",
   })) as any;
   assert.equal(all.count, 2);
 
   const acceptedOnly = (await listRoute.handler({} as any, {
     params: {},
     query: { status: "accepted" },
+    userId: "user-1",
   })) as any;
   assert.equal(acceptedOnly.count, 1);
   assert.equal(acceptedOnly.friends[0].remoteInstanceId, "inst-a");
